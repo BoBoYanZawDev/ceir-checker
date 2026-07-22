@@ -148,6 +148,45 @@ class Page(ctk.CTkFrame):
             self.subtitle_label.grid(row=1, column=0, padx=30, sticky="w")
 
 
+class ThemeToggle(ctk.CTkFrame):
+    """Two-button theme control with distinct selected text colors."""
+
+    def __init__(self, master: ctk.CTkFrame, command: Callable[[str], None]) -> None:
+        super().__init__(
+            master, width=168, height=34, corner_radius=10,
+            fg_color=("#DDE4EE", "#263449"),
+        )
+        self.command = command
+        self.pack_propagate(False)
+        self.light_button = ctk.CTkButton(
+            self, text="☀ Light", width=81, height=28, corner_radius=8,
+            font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self.choose("Light"),
+        )
+        self.light_button.pack(side="left", padx=(3, 1), pady=3)
+        self.dark_button = ctk.CTkButton(
+            self, text="☾ Dark", width=81, height=28, corner_radius=8,
+            font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self.choose("Dark"),
+        )
+        self.dark_button.pack(side="left", padx=(1, 3), pady=3)
+        self.set("Light")
+
+    def choose(self, mode: str) -> None:
+        self.set(mode)
+        self.command(mode)
+
+    def set(self, mode: str) -> None:
+        selected = {
+            "fg_color": BLUE, "hover_color": BLUE_HOVER, "text_color": "#FFFFFF",
+        }
+        unselected = {
+            "fg_color": ("#F3F6FA", "#334155"),
+            "hover_color": ("#E6ECF3", "#475569"),
+            "text_color": ("#334155", "#E2E8F0"),
+        }
+        self.light_button.configure(**(selected if mode == "Light" else unselected))
+        self.dark_button.configure(**(selected if mode == "Dark" else unselected))
+
+
 class CheckView(Page):
     def __init__(
         self,
@@ -168,6 +207,9 @@ class CheckView(Page):
         self.failed_identifiers: list[str] = []
         self.current_input_mode = "IMEI CHECK"
         self.input_cache = {"IMEI CHECK": "", "APP ID CHECK": ""}
+        self.live_results: list[tuple[tuple[object, ...], tuple[str, ...]]] = []
+        self.result_page = 1
+        self.result_page_size = 100
         self.service = CEIRService()
         self.grid_rowconfigure(0, weight=1)
         body = ctk.CTkFrame(self)
@@ -255,11 +297,7 @@ class CheckView(Page):
         result_header = ctk.CTkFrame(result, fg_color="transparent")
         result_header.pack(fill="x", padx=24, pady=(20, 12))
         ctk.CTkLabel(result_header, text="Check Result", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
-        self.theme_switch = ctk.CTkSegmentedButton(
-            result_header, values=["Light", "Dark"], width=150, height=32,
-            selected_color=BLUE, selected_hover_color=BLUE_HOVER,
-            command=self.on_theme,
-        )
+        self.theme_switch = ThemeToggle(result_header, self._change_theme)
         self.theme_switch.pack(side="right")
         self.theme_switch.set(ctk.get_appearance_mode())
         self.result_status = ctk.CTkLabel(result, text="Ready to check", font=ctk.CTkFont(size=17, weight="bold"), text_color=("#64748B", "#94A3B8"))
@@ -276,11 +314,36 @@ class CheckView(Page):
         result_scroll = ttk.Scrollbar(result_table_frame, orient="vertical", command=self.results_tree.yview)
         self.results_tree.configure(yscrollcommand=result_scroll.set)
         self.results_tree.grid(row=0, column=0, sticky="nsew")
+        self.results_tree.bind("<Configure>", self._resize_result_page)
         result_scroll.grid(row=0, column=1, sticky="ns")
         self.results_tree.tag_configure("good", foreground=GREEN)
         self.results_tree.tag_configure("bad", foreground=RED)
+        result_footer = ctk.CTkFrame(result, fg_color="transparent")
+        result_footer.pack(fill="x", padx=14, pady=(0, 4))
+        result_footer.grid_columnconfigure(1, weight=1)
+        self.result_prev = ctk.CTkButton(
+            result_footer, text="‹ Prev", width=72, height=30, fg_color="transparent",
+            text_color=("#475569", "#CBD5E1"), hover_color=("#E8EEF7", "#263449"),
+            command=lambda: self._change_result_page(-1),
+        )
+        self.result_prev.grid(row=0, column=0, sticky="w")
+        self.result_page_label = ctk.CTkLabel(
+            result_footer, text="Page 1 of 1 (Total Records: 0)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.result_page_label.grid(row=0, column=1)
+        self.result_next = ctk.CTkButton(
+            result_footer, text="Next ›", width=72, height=30, fg_color="transparent",
+            text_color=("#475569", "#CBD5E1"), hover_color=("#E8EEF7", "#263449"),
+            command=lambda: self._change_result_page(1),
+        )
+        self.result_next.grid(row=0, column=2, sticky="e")
         self.note = ctk.CTkLabel(result, text="Brand and Model are loaded automatically from the CEIR Device Info API.", wraplength=420, justify="left", text_color=("#64748B", "#94A3B8"))
         self.note.pack(anchor="w", padx=24, pady=(20, 10))
+        self._render_result_page()
+
+    def _change_theme(self, mode: str) -> None:
+        self.on_theme(mode)
 
     def _change_input_mode(self, mode: str) -> None:
         self.input_cache[self.current_input_mode] = self.imei.get("1.0", "end").strip()
@@ -493,18 +556,55 @@ class CheckView(Page):
         self.after(0, self._finish_batch, succeeded, len(app_ids), errors)
 
     def _set_results(self, _text: str = "") -> None:
+        self.live_results = []
+        self.result_page = 1
+        self._render_result_page()
+
+    def _render_result_page(self) -> None:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
+        total = len(self.live_results)
+        total_pages = max(1, math.ceil(total / self.result_page_size))
+        self.result_page = max(1, min(self.result_page, total_pages))
+        start = (self.result_page - 1) * self.result_page_size
+        for values, tags in self.live_results[start:start + self.result_page_size]:
+            self.results_tree.insert("", "end", values=values, tags=tags)
+        self.result_page_label.configure(
+            text=f"Page {self.result_page} of {total_pages} (Total Records: {total})"
+        )
+        self.result_prev.configure(state="normal" if self.result_page > 1 else "disabled")
+        self.result_next.configure(state="normal" if self.result_page < total_pages else "disabled")
+
+    def _change_result_page(self, amount: int) -> None:
+        self.result_page += amount
+        self._render_result_page()
+
+    def _resize_result_page(self, event: tk.Event) -> None:
+        # Treeview header is about 42 px and styled rows are 40 px high.
+        # Use the available height rather than an arbitrary fixed record count.
+        available_rows = max(1, (int(event.height) - 42) // 40)
+        if available_rows == self.result_page_size:
+            return
+        self.result_page_size = available_rows
+        self.result_page = max(1, math.ceil(len(self.live_results) / self.result_page_size))
+        self._render_result_page()
 
     def _append_result(self, identifier: str, brand: str, model: str, payment: str, block: str, base_price: int | None, total_tax: int | None, is_good: bool | None) -> None:
-        self.results_tree.insert("", "end", values=(
+        values = (
             identifier, " ".join(part for part in (brand, model) if part), payment, block,
             format_mmk(base_price), format_mmk(total_tax),
-        ), tags=(("good",) if is_good else ("bad",) if is_good is False else ()))
+        )
+        tags = ("good",) if is_good else ("bad",) if is_good is False else ()
+        self.live_results.append((values, tags))
+        self.result_page = max(1, math.ceil(len(self.live_results) / self.result_page_size))
+        self._render_result_page()
 
     def _append_error(self, error: str) -> None:
         parts = error.split(":", 1)
-        self.results_tree.insert("", "end", values=(parts[0], "", "ERROR", parts[1].strip() if len(parts) > 1 else error, "", ""), tags=("bad",))
+        values = (parts[0], "", "ERROR", parts[1].strip() if len(parts) > 1 else error, "", "")
+        self.live_results.append((values, ("bad",)))
+        self.result_page = max(1, math.ceil(len(self.live_results) / self.result_page_size))
+        self._render_result_page()
 
     def _show_error(self, detail: str) -> None:
         self.check_button.configure(state="normal", text=self._check_button_label())
