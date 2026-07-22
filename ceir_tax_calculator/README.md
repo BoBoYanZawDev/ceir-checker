@@ -71,11 +71,31 @@ python -m pytest -q
 
 ## Package
 
-Build a Windows `.exe` from a Windows machine:
+### Windows one-click build
+
+Copy the project to a Windows computer with Python 3.12 installed, then double-click:
+
+```text
+build_windows.bat
+```
+
+The executable and its required runtime files will be created at:
+
+```text
+dist\CEIR Mobile Tax Calculator.exe
+```
+
+This is a single-file Windows executable.
+
+Equivalent manual command:
 
 ```powershell
-pyinstaller --noconfirm --clean --windowed --name "CEIR Mobile Tax Calculator" --collect-all customtkinter main.py
+pyinstaller --noconfirm --clean --windowed --onefile --name "CEIR Mobile Tax Calculator" --collect-all customtkinter main.py
 ```
+
+### Build without a Windows computer
+
+The manual GitHub Actions workflow at `.github/workflows/build-windows.yml` builds on an official Windows runner. Push this directory to a GitHub repository, open **Actions → Build Windows EXE → Run workflow**, then download the `CEIR-Mobile-Tax-Calculator-Windows` artifact.
 
 Build a macOS `.app` from a Mac:
 
