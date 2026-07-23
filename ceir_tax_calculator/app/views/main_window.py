@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import threading
 import tkinter as tk
 from decimal import Decimal, InvalidOperation
@@ -25,6 +26,10 @@ BLUE_HOVER = "#1D4ED8"
 GREEN = "#059669"
 RED = "#DC2626"
 AMBER = "#D97706"
+TABLE_FONT_SIZE = 13 if sys.platform == "win32" else 11
+TABLE_HEADER_FONT_SIZE = 12 if sys.platform == "win32" else 11
+TABLE_ROW_HEIGHT = 46 if sys.platform == "win32" else 40
+TABLE_HEADER_HEIGHT = 46 if sys.platform == "win32" else 42
 
 
 def status_glyph(value: object) -> str:
@@ -580,9 +585,9 @@ class CheckView(Page):
         self._render_result_page()
 
     def _resize_result_page(self, event: tk.Event) -> None:
-        # Treeview header is about 42 px and styled rows are 40 px high.
+        # Use platform-aware header/row sizes so Windows DPI scaling paginates correctly.
         # Use the available height rather than an arbitrary fixed record count.
-        available_rows = max(1, (int(event.height) - 42) // 40)
+        available_rows = max(1, (int(event.height) - TABLE_HEADER_HEIGHT) // TABLE_ROW_HEIGHT)
         if available_rows == self.result_page_size:
             return
         self.result_page_size = available_rows
@@ -811,7 +816,7 @@ class HistoryGrid(tk.Frame):
         for column, heading in enumerate(self.HEADINGS):
             header = tk.Label(
                 self, text=heading, bg=header_background, fg=header_foreground,
-                font=("Segoe UI", 11, "bold"), padx=7, pady=10,
+                font=("Segoe UI", TABLE_HEADER_FONT_SIZE, "bold"), padx=7, pady=10,
                 highlightbackground=border, highlightcolor=border, highlightthickness=1, bd=0,
             )
             header.grid(row=0, column=column, sticky="nsew")
@@ -842,7 +847,7 @@ class HistoryGrid(tk.Frame):
             anchor = "e" if column in {8, 9} else "center"
             cell = tk.Label(
                 self, text=value, bg=row_background, fg=foreground, anchor=anchor,
-                font=("Segoe UI", 11, "bold" if column in {3, 6, 7} else "normal"),
+                font=("Segoe UI", TABLE_FONT_SIZE, "bold" if column in {3, 6, 7} else "normal"),
                 padx=7, pady=8, highlightbackground=border, highlightcolor=border,
                 highlightthickness=1, bd=0,
             )
@@ -911,9 +916,9 @@ class HistoryView(Page):
         dark = ctk.get_appearance_mode() == "Dark"
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("Treeview", background="#111C2E" if dark else "#FFFFFF", fieldbackground="#111C2E" if dark else "#FFFFFF", foreground="#E5E7EB" if dark else "#334155", rowheight=40, borderwidth=0, font=("Segoe UI", 11))
+        style.configure("Treeview", background="#111C2E" if dark else "#FFFFFF", fieldbackground="#111C2E" if dark else "#FFFFFF", foreground="#E5E7EB" if dark else "#334155", rowheight=TABLE_ROW_HEIGHT, borderwidth=0, font=("Segoe UI", TABLE_FONT_SIZE))
         style.map("Treeview", background=[("selected", BLUE)], foreground=[("selected", "#FFFFFF")])
-        style.configure("Treeview.Heading", background="#17243A" if dark else "#EEF2F7", foreground="#CBD5E1" if dark else "#334155", relief="flat", padding=11, font=("Segoe UI", 11, "bold"))
+        style.configure("Treeview.Heading", background="#17243A" if dark else "#EEF2F7", foreground="#CBD5E1" if dark else "#334155", relief="flat", padding=11, font=("Segoe UI", TABLE_HEADER_FONT_SIZE, "bold"))
         self.table.configure_theme(dark)
 
     def reset_page(self) -> None:
