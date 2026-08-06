@@ -23,6 +23,7 @@ python -m PyInstaller ^
   --onefile ^
   --name "CEIR Mobile Tax Calculator" ^
   --collect-all customtkinter ^
+  --collect-all pywebview ^
   main.py
 if errorlevel 1 goto :build_error
 

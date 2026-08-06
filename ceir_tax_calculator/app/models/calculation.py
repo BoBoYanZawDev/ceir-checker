@@ -27,6 +27,47 @@ class TaxResult:
 
 
 @dataclass(slots=True)
+class ApplicantProfile:
+    taxpayer_type: str = "Individual"
+    is_foreigner: bool = False
+    tin: str = ""
+    national_id: str = ""
+    full_name: str = ""
+    birthday: str = ""
+    address: str = ""
+    email: str = ""
+    phone: str = ""
+    tax_office_division: str = ""
+    tax_office_code: str = ""
+    region_code: str = ""
+    township_code: str = ""
+    uin: str = ""
+
+    def is_complete(self) -> bool:
+        return bool(self.national_id and self.full_name and self.birthday and self.address and self.phone)
+
+    def to_api_payload(self) -> dict:
+        return {
+            "id": None,
+            "requestId": None,
+            "taxpayerType": self.taxpayer_type,
+            "isForeigner": self.is_foreigner,
+            "tin": self.tin or None,
+            "nationalId": self.national_id,
+            "fullName": self.full_name,
+            "birthday": self.birthday,
+            "address": self.address,
+            "email": self.email or None,
+            "phone": self.phone,
+            "taxOfficeDivision": self.tax_office_division or None,
+            "taxOfficeCode": self.tax_office_code or None,
+            "regionCode": self.region_code or None,
+            "townshipCode": self.township_code or None,
+            "uin": self.uin or None,
+        }
+
+
+@dataclass(slots=True)
 class CalculationRecord:
     check_type: str
     imei_or_app_id: str = ""

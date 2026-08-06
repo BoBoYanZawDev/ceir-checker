@@ -4,7 +4,7 @@ A focused Windows/macOS desktop app for checking a single IMEI with Myanmar CEIR
 
 ## Features
 
-- Official CEIR multi-IMEI workflow with one background API request per IMEI (the UI stays responsive)
+- Official CEIR multi-IMEI workflow with one fresh ALTCHA token per verification batch (the UI stays responsive)
 - Exact `Decimal`/`ROUND_HALF_UP` tax calculation
 - Automatic recalculation while the base price is entered
 - Automatic CEIR GSMA lookup for manufacturer, brand, model, device type, OS, TAC, and supported IMEI count
@@ -90,7 +90,7 @@ This is a single-file Windows executable.
 Equivalent manual command:
 
 ```powershell
-pyinstaller --noconfirm --clean --windowed --onefile --name "CEIR Mobile Tax Calculator" --collect-all customtkinter main.py
+pyinstaller --noconfirm --clean --windowed --onefile --name "CEIR Mobile Tax Calculator" --collect-all customtkinter --collect-all pywebview main.py
 ```
 
 ### Build without a Windows computer
@@ -100,7 +100,7 @@ The manual GitHub Actions workflow at `.github/workflows/build-windows.yml` buil
 Build a macOS `.app` from a Mac:
 
 ```bash
-pyinstaller --noconfirm --clean --windowed --name "CEIR Mobile Tax Calculator" --collect-all customtkinter main.py
+pyinstaller --noconfirm --clean --windowed --name "CEIR Mobile Tax Calculator" --collect-all customtkinter --collect-all pywebview main.py
 ```
 
 Packaged output is placed in `dist/`. The SQLite database is not stored beside the executable; it is created under the current user's application-data directory.

@@ -3,8 +3,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from app.database import Database
-from app.models.calculation import CalculationRecord, TaxSettings
-from app.utils.constants import DEFAULT_SETTINGS
+from app.models.calculation import ApplicantProfile, CalculationRecord, TaxSettings
+from app.utils.constants import DEFAULT_APPLICANT, DEFAULT_SETTINGS
 
 
 class CalculationRepository:
@@ -21,7 +21,8 @@ class CalculationRepository:
     def _seed_settings(self) -> None:
         with self.database.connect() as connection:
             connection.executemany(
-                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", DEFAULT_SETTINGS.items()
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                {**DEFAULT_SETTINGS, **DEFAULT_APPLICANT}.items(),
             )
 
     def add(self, record: CalculationRecord) -> int:
@@ -108,3 +109,47 @@ class CalculationRepository:
                 DEFAULT_SETTINGS.items(),
             )
         return self.get_settings()
+
+    def get_applicant_profile(self) -> ApplicantProfile:
+        with self.database.connect() as connection:
+            stored = {row["key"]: row["value"] for row in connection.execute("SELECT key, value FROM settings")}
+        values = {**DEFAULT_APPLICANT, **stored}
+        return ApplicantProfile(
+            taxpayer_type=values["applicant_taxpayer_type"] or "Individual",
+            is_foreigner=values["applicant_is_foreigner"] == "1",
+            tin=values["applicant_tin"],
+            national_id=values["applicant_national_id"],
+            full_name=values["applicant_full_name"],
+            birthday=values["applicant_birthday"],
+            address=values["applicant_address"],
+            email=values["applicant_email"],
+            phone=values["applicant_phone"],
+            tax_office_division=values["applicant_tax_office_division"],
+            tax_office_code=values["applicant_tax_office_code"],
+            region_code=values["applicant_region_code"],
+            township_code=values["applicant_township_code"],
+            uin=values["applicant_uin"],
+        )
+
+    def save_applicant_profile(self, profile: ApplicantProfile) -> None:
+        values = {
+            "applicant_taxpayer_type": profile.taxpayer_type,
+            "applicant_is_foreigner": "1" if profile.is_foreigner else "0",
+            "applicant_tin": profile.tin,
+            "applicant_national_id": profile.national_id,
+            "applicant_full_name": profile.full_name,
+            "applicant_birthday": profile.birthday,
+            "applicant_address": profile.address,
+            "applicant_email": profile.email,
+            "applicant_phone": profile.phone,
+            "applicant_tax_office_division": profile.tax_office_division,
+            "applicant_tax_office_code": profile.tax_office_code,
+            "applicant_region_code": profile.region_code,
+            "applicant_township_code": profile.township_code,
+            "applicant_uin": profile.uin,
+        }
+        with self.database.connect() as connection:
+            connection.executemany(
+                "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                values.items(),
+            )
