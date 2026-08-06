@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CEIR Tool</title>
+<link rel="stylesheet" href="renderer/style.css">
+</head>
+<body>
+
+<!-- Top bar -->
+<header id="topbar">
+  <div class="brand"><span class="brand-icon">C</span> CEIR Tool</div>
+  <div class="status-pill"><span id="status-dot" class="dot red"></span> <span id="status-text">Connecting…</span></div>
+  <!-- Two-segment live indicators (Internet · API). Both passive — they
+       never touch the bridge, so zero performance impact on operations. -->
+  <div id="conn-cluster" class="conn-cluster">
+    <div id="conn-internet" class="conn-seg" title="Internet">
+      <span class="seg-icon">🌐</span><span class="dot amber pulse"></span><span class="seg-text">—</span>
+    </div>
+    <div id="conn-api" class="conn-seg" title="API (last bridge call)">
+      <span class="seg-icon">🔧</span><span class="dot mute"></span><span class="seg-text">idle</span>
+    </div>
+  </div>
+  <div id="user-chip" class="conn-seg" style="display:none;" title="Signed-in account">
+    <span class="seg-icon">👤</span><span id="user-name" class="seg-text">—</span>
+  </div>
+  <div id="credit-chip" class="conn-seg" style="display:none;" title="Prepaid credit balance (shared with the mobile app)">
+    <span class="seg-icon">💳</span><span id="credit-balance" class="seg-text">—</span>
+  </div>
+  <div class="spacer"></div>
+  <button id="test-api-btn"  class="top-tool-btn" title="Ping CEIR to verify the session is alive">🩺 Test API</button>
+  <button id="diagnose-btn"  class="top-tool-btn" title="Run network diagnostics (DNS, HTTPS, bridge)">🔍 Diagnose</button>
+  <button id="show-ceir-btn" class="top-tool-btn" title="Show the hidden CEIR window">👁 View</button>
+  <button id="capture-btn"   class="top-tool-btn" title="Record ALL CEIR network traffic to a log file — do the action manually on the website while recording">🎥 Capture</button>
+  <select id="palette-select" class="palette-select" title="Choose a colour theme"></select>
+  <button id="theme-btn"     class="top-tool-btn" title="Toggle light / dark theme">☀️</button>
+  <button id="connect-btn"   class="top-tool-btn" style="border-color: var(--accent); color: var(--accent);" title="Reconnect: reload ceir.gov.mm">↻ Reconnect</button>
+</header>
+<div id="progress-track"><div id="progress-fill"></div></div>
+
+<!-- Body -->
+<div id="body">
+  <nav id="sidebar">
+    <div class="nav-group-label">Workflows</div>
+    <ul>
+      <li data-page="home"     class="active"><span class="nav-icon">🏠</span> Home</li>
+      <li data-page="imei"><span class="nav-icon">📱</span> IMEI Check</li>
+      <li data-page="tax"><span class="nav-icon">📋</span> Tax Register</li>
+      <li data-page="pay"><span class="nav-icon">💳</span> Pay Center</li>
+    </ul>
+    <div class="nav-group-label">Configure</div>
+    <ul>
+      <li data-page="settings"><span class="nav-icon">⚙️</span> Settings</li>
+    </ul>
+    <div class="sidebar-footer">CEIR Electron · v0.2</div>
+  </nav>
+
+  <main id="pages">
+
+    <!-- ── HOME ───────────────────────────────────────────── -->
+    <section id="page-home" class="page active">
+      <!-- CEIR site status banner — shown only when not healthy -->
+      <div id="ceir-status-banner" style="display:none;"></div>
+
+      <!-- Resume incomplete registrations banner -->
+      <div id="resume-banner" style="display:none;"></div>
+
+      <div class="page-head">
+        <h1>Dashboard</h1>
+        <span class="hint">Live overview — updates as you work.</span>
+        <div class="grow"></div>
+        <button id="archive-day-btn" class="ghost sm" title="Export today's results and clear the table">🗄 End of Day</button>
+      </div>
+
+      <!-- Section: Input queue -->
+      <div class="stat-section-label">Pasted, not yet processed</div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">IMEI Check input</div>
+          <div class="stat-value" id="stat-input-check">0</div>
+          <div class="stat-sub">phones in textarea</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tax Register input</div>
+          <div class="stat-value" id="stat-input-tax">0</div>
+          <div class="stat-sub">phones in textarea</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Session</div>
+          <div class="stat-value" id="stat-session">—</div>
+          <div class="stat-sub" id="stat-session-sub">Connecting to CEIR…</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Logs</div>
+          <div class="stat-value" id="stat-log-count">0</div>
+          <div class="stat-sub">events recorded today</div>
+        </div>
+      </div>
+
+      <!-- Section: Tax Register -->
+      <div class="stat-section-label">Tax Register</div>
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-label">Total rows</div> <div class="stat-value" id="stat-loaded">0</div><div class="stat-sub">in results table</div></div>
+        <div class="stat-card"><div class="stat-label">Registered</div> <div class="stat-value green" id="stat-registered">0</div><div class="stat-sub">Declaration IDs</div></div>
+        <div class="stat-card"><div class="stat-label">Paid</div>       <div class="stat-value green" id="stat-paid">0</div><div class="stat-sub">via IRD</div></div>
+        <div class="stat-card"><div class="stat-label">Pending</div>    <div class="stat-value amber" id="stat-pending">0</div><div class="stat-sub">waiting for payment</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Last 7 days</h2>
+          <span class="counter mute" id="chart-summary"></span>
+        </div>
+        <div id="chart-host" style="height:80px;"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Quick Actions</h2></div>
+        <div class="quick-tiles">
+          <div class="quick-tile" data-goto="imei">
+            <div class="tile-icon">📱</div>
+            <div class="tile-title">Check IMEIs</div>
+            <div class="tile-desc">Verify payment / block status for a list of phones</div>
+          </div>
+          <div class="quick-tile" data-goto="tax">
+            <div class="tile-icon">📋</div>
+            <div class="tile-title">Tax Register</div>
+            <div class="tile-desc">Generate Declaration IDs and pay tax via IRD</div>
+          </div>
+          <div class="quick-tile" data-goto="pay">
+            <div class="tile-icon">💳</div>
+            <div class="tile-title">Pay Center</div>
+            <div class="tile-desc">Embedded browser to step through unpaid declarations</div>
+          </div>
+          <div class="quick-tile" data-goto="settings">
+            <div class="tile-icon">⚙️</div>
+            <div class="tile-title">Settings</div>
+            <div class="tile-desc">Applicant info, timing, printer</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── IMEI CHECK ─────────────────────────────────────── -->
+    <section id="page-imei" class="page">
+      <div class="page-head"><h1>IMEI Check</h1><span class="hint">Bulk verify against the CEIR registry.</span></div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Input</h2>
+          <span class="counter" id="imei-count">0 phones</span>
+        </div>
+        <div class="row">
+          <button id="imei-load-btn" class="ghost">📂 Load file</button>
+          <div class="grow"></div>
+          <button id="imei-start-btn" class="primary">▶ Start Check</button>
+          <button id="imei-stop-btn"  class="danger" disabled>Stop</button>
+        </div>
+        <textarea id="imei-input" placeholder="353456789012345,353456789012346&#10;357440806712128&#10;# comment lines ignored"></textarea>
+      </div>
+
+      <div class="card grow">
+        <div class="card-head">
+          <h2>Results</h2>
+          <div class="row">
+            <span class="counter mute" id="imei-progress"></span>
+            <span class="counter" id="imei-summary">0 paid · 0 unpaid · 0 failed</span>
+          </div>
+        </div>
+        <div class="row">
+          <button id="imei-clear-btn"   class="ghost">Clear</button>
+          <button id="imei-recheck-btn" class="ghost">↻ Re-check fails</button>
+          <div class="grow"></div>
+          <button id="imei-export-fail-btn" class="ghost">Export Fail List</button>
+          <button id="imei-export-btn" class="primary">📥 Export Excel</button>
+        </div>
+        <div class="table-wrap">
+          <table id="imei-table">
+            <thead><tr><th>IMEI 1</th><th>IMEI 2</th><th>Brand / Model</th><th>Payment 1</th><th>Payment 2</th><th>Block</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── TAX REGISTER ───────────────────────────────────── -->
+    <section id="page-tax" class="page">
+      <div class="page-head">
+        <h1>Tax Register</h1>
+        <span class="hint">Generate Declaration IDs and prepare for payment.</span>
+        <div class="grow"></div>
+        <span id="tax-progress" class="counter mute"></span>
+      </div>
+
+      <!-- Workflow phase banner — shows the current stage of a batch -->
+      <div id="workflow-banner" style="display:none;"></div>
+      <!-- Smart resume banner — shows when payments need re-checking after launch -->
+      <div id="smart-resume-banner" style="display:none;"></div>
+
+      <!-- Applicant info: collapsible accordion, collapsed by default once saved -->
+      <div class="card collapsible" id="appl-card">
+        <div class="collapsible-head" id="appl-toggle">
+          <span class="chev">▸</span>
+          <h2 style="margin:0;">Applicant Info</h2>
+          <span class="counter mute" id="appl-summary">— not set —</span>
+          <div class="grow"></div>
+          <button id="appl-save-btn" class="primary sm">Save</button>
+        </div>
+        <div class="collapsible-body">
+          <div class="form-grid">
+            <div class="form-field"><label>National ID</label><input type="text" id="appl-nid"     placeholder="5/မရန(N)329768"></div>
+            <div class="form-field"><label>Full Name</label>  <input type="text" id="appl-name"    placeholder="Full Name"></div>
+            <div class="form-field"><label>Birthday</label>   <input type="text" id="appl-bday"    placeholder="YYYY-MM-DD"></div>
+            <div class="form-field"><label>Phone</label>      <input type="text" id="appl-phone"   placeholder="959XXXXXXXXX"></div>
+            <div class="form-field"><label>Address</label>    <input type="text" id="appl-address" placeholder="Address"></div>
+            <div class="form-field"><label>Email</label>      <input type="text" id="appl-email"   placeholder="email@example.com"></div>
+            <div class="form-field"><label>Tax Division</label><input type="text" id="appl-div"    placeholder="MMR005"></div>
+            <div class="form-field"><label>Office Code</label> <input type="text" id="appl-office" placeholder="R05-03-MYN"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- IMEI input: collapsible too, collapsed by default after Start -->
+      <div class="card collapsible" id="input-card">
+        <div class="collapsible-head" id="input-toggle">
+          <span class="chev">▾</span>
+          <h2 style="margin:0;">IMEI Input</h2>
+          <span class="counter" id="tax-count">0 phones</span>
+          <div class="grow"></div>
+          <button id="tax-load-btn"  class="ghost sm">📂 Load file</button>
+          <button id="tax-start-btn" class="warning sm">▶ Start Register</button>
+          <button id="tax-stop-btn"  class="danger sm" disabled>Stop</button>
+          <button id="auto-flow-btn" class="primary sm">⚡ Auto Flow</button>
+        </div>
+        <div class="collapsible-body">
+          <textarea id="tax-input" placeholder="860812086707350,860812086707343&#10;# one phone (pair) per line"></textarea>
+        </div>
+      </div>
+
+      <!-- Results table: the main focus, takes all remaining height -->
+      <div class="card grow" style="padding:10px 12px;gap:8px;">
+        <div class="row" style="flex-wrap:wrap;gap:6px;">
+          <h2 style="margin-right:6px;">Declarations</h2>
+          <input type="text" id="tax-filter" placeholder="🔍 Filter by IMEI, App ID, or status…" style="width:280px;font-family:inherit;">
+          <input type="text" id="tax-lookup" placeholder="Lookup App ID (MM-CR-...)" style="width:180px;font-family:Menlo,monospace;">
+          <button id="tax-lookup-btn" class="sm">Lookup</button>
+          <button id="tax-clear-btn"      class="ghost sm">Clear</button>
+          <button id="tax-import-btn"     class="ghost sm">📂 Import</button>
+          <div class="grow"></div>
+          <button id="tax-check-all-btn"  class="success sm">✓ Check All</button>
+          <button id="tax-refetch-btn"    class="sm">↻ Re-fetch</button>
+          <button id="tax-pay-next-btn"   class="sm">→ Pay Next</button>
+          <button id="tax-paycenter-btn"  class="warning sm">💳 Pay Center</button>
+          <button id="tax-print-toggle"   class="ghost sm">Print On/Off</button>
+          <button id="tax-print-all-btn"  class="purple sm">🖨 Print All</button>
+          <button id="tax-export-btn"     class="primary sm">📥 Export</button>
+        </div>
+        <div class="table-wrap">
+          <table id="tax-table">
+            <thead>
+              <tr>
+                <th>IMEI 1</th><th>IMEI 2</th><th>Declaration ID</th>
+                <th>Total</th><th>Customs</th><th>Comm.</th><th>Fine</th>
+                <th>Pay Status</th><th>Print?</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── PAY CENTER inline ──────────────────────────────── -->
+    <section id="page-pay" class="page">
+      <!-- Empty state shown when no unpaid rows -->
+      <div id="pc-empty" style="display:flex;flex:1;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:48px;">
+        <div style="font-size:46px;">💳</div>
+        <div style="font-weight:600;font-size:15px;color:var(--text-mute);">No unpaid declarations</div>
+        <div style="font-size:12px;color:var(--text-dim);">
+          Register some phones in Tax Register first.
+        </div>
+        <div>
+          <button class="primary" data-goto="tax">Go to Tax Register</button>
+        </div>
+      </div>
+
+      <!-- Main pay-center surface — full bleed -->
+      <div id="pc-main" class="pc-layout" style="display:none;flex:1;min-height:0;">
+        <aside id="pc-sidebar"></aside>
+        <div class="pc-stage">
+          <div class="pc-toolbar">
+            <button id="pc-prev"  class="ghost sm">◀ Prev</button>
+            <button id="pc-next"  class="primary sm">Next ▶</button>
+            <span id="pc-current-pill" class="status-pill" style="font-family:Menlo,monospace;"></span>
+            <span id="pc-queue-info" class="counter mute" style="margin-left:8px;">0/0 ready</span>
+            <div class="grow"></div>
+            <button id="pc-reload" class="ghost sm">↻ Reload</button>
+            <button id="pc-mark"   class="success sm">✓ Mark Paid</button>
+            <button id="pc-close"  class="ghost sm">Close</button>
+          </div>
+          <div class="pc-frame-wrap">
+            <webview id="pc-webview" src="about:blank"
+                     partition="persist:ceir"
+                     allowpopups
+                     style="flex:1;display:flex;width:100%;height:100%;"></webview>
+            <div id="pc-overlay" class="pc-overlay">
+              <div class="pc-overlay-inner">
+                <div class="pc-overlay-icon">⟳</div>
+                <div id="pc-overlay-text">Preparing IRD page…</div>
+              </div>
+            </div>
+            <!-- Applicant editor — IRD rejects payments when the saved
+                 applicant data is malformed (e.g. NRC written as (နိုင်)
+                 instead of (N)); this lets the user fix and re-save it. -->
+            <div id="pc-edit-modal" class="pc-modal hidden">
+              <div class="pc-modal-card">
+                <h3 style="margin:0 0 10px;">✎ Applicant — <span id="pcem-dec" style="font-family:Menlo,monospace;font-size:13px;"></span></h3>
+                <div class="pcem-grid">
+                  <label>NRC / National ID <input id="pcem-nationalId"></label>
+                  <label>Full Name <input id="pcem-fullName"></label>
+                  <label>Birthday (YYYY-MM-DD) <input id="pcem-birthday"></label>
+                  <label>Address <input id="pcem-address"></label>
+                  <label>Email <input id="pcem-email"></label>
+                  <label>Phone <input id="pcem-phone"></label>
+                </div>
+                <div class="pcem-hint">
+                  IRD rejects some NRC formats. Use <b>(N)</b> instead of <b>(နိုင်)</b>,
+                  e.g. <code>12/အလန(N)288521</code>, and check the township letters.
+                </div>
+                <div class="pcem-actions">
+                  <button id="pcem-cancel" class="ghost sm">Cancel</button>
+                  <button id="pcem-save" class="primary sm">Save &amp; Reload Page</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── SETTINGS ───────────────────────────────────────── -->
+    <section id="page-settings" class="page">
+      <div class="page-head"><h1>Settings</h1><span class="hint">Tune timing and printer behaviour.</span></div>
+
+      <div class="card">
+        <div class="card-head"><h2>IMEI Check timing</h2></div>
+        <div class="form-grid">
+          <div class="form-field"><label>Phones per API call</label> <input type="number" id="set-batch-size"   min="1" max="20"></div>
+          <div class="form-field"><label>Delay between batches (s)</label> <input type="number" id="set-delay"  min="0" max="30"></div>
+          <div class="form-field"><label>Request timeout (s)</label> <input type="number" id="set-timeout"     min="5" max="120"></div>
+          <div class="form-field"><label>Tax register delay (s)</label> <input type="number" id="set-tax-delay" min="1" max="30"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>CF / Connection</h2></div>
+        <div class="form-grid">
+          <div class="form-field"><label>Max wait for CF (s)</label> <input type="number" id="set-cf-wait" min="15" max="300"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Printer</h2>
+          <button id="detect-printer-btn" class="sm">🔍 Detect Brother QL</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-field"><label>Printer name (lpr)</label> <input type="text" id="set-printer-name" placeholder="Brother_QL_820NWB (leave blank to auto-detect)"></div>
+          <div class="form-field"><label>Label width (mm)</label>   <input type="text" id="set-label-size" placeholder="62"></div>
+        </div>
+        <div id="printer-list" class="counter mute" style="font-family:Menlo,monospace;font-size:11px;"></div>
+        <p style="color:var(--text-dim);font-size:11px;">
+          Printer must be added in macOS System Settings → Printers &amp; Scanners.
+          Leave blank to auto-detect any Brother QL printer in CUPS. If no Brother printer is found, receipts open in your default browser.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Account</h2></div>
+        <div class="row">
+          <span id="account-name" class="counter mute">Not signed in</span>
+          <span id="account-email" class="counter mute" style="font-family:Menlo,monospace;font-size:11px;"></span>
+          <button id="logout-btn" class="ghost sm">Log out</button>
+        </div>
+        <p style="color:var(--text-dim);font-size:11px;">
+          Your work (registrations, payments, errors) is saved locally as before AND
+          uploaded to the company system under this account for the daily report.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>License</h2></div>
+        <div class="row">
+          <span id="license-status" class="counter mute">Checking…</span>
+        </div>
+        <div class="row">
+          <span id="license-mid" class="counter mute" style="font-family:Menlo,monospace;font-size:11px;"></span>
+          <button id="license-copy-mid" class="ghost sm">Copy Machine ID</button>
+        </div>
+        <p style="color:var(--text-dim);font-size:11px;">
+          To renew or move to a new computer, send the Machine ID above to your provider.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Audit Logs</h2></div>
+        <p style="color:var(--text-mute);font-size:12px;">
+          Every Tax Register attempt is recorded — IMEI(s), full request &amp; response, Declaration ID, status — even if it failed.
+          Logs are split per day into JSONL (full detail) and CSV (spreadsheet-friendly) files.
+        </p>
+        <div class="row">
+          <button id="open-logs-btn">📂 Open Logs Folder</button>
+          <span id="logs-path" class="counter mute" style="font-family:Menlo,monospace;font-size:11px;"></span>
+        </div>
+      </div>
+
+      <div class="row"><button id="settings-save-btn" class="primary big">Save Settings</button></div>
+    </section>
+
+  </main>
+
+  <aside id="log-drawer">
+    <div class="log-header">
+      <span>Activity Log</span>
+      <button id="log-clear" class="ghost sm">Clear</button>
+    </div>
+    <div id="log"></div>
+  </aside>
+</div>
+
+<div id="toasts"></div>
+
+<script src="renderer/app.js"></script>
+</body>
+</html>

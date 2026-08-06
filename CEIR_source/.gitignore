@@ -1,0 +1,35 @@
+
+
+# Virtual environments
+.venv/
+.venv-build/
+venv/
+env/
+
+# Packaging and PyInstaller output
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Local application data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
+# Logs and local configuration
+*.log
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+node_modules/*
