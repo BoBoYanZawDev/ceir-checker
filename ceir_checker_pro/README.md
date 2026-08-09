@@ -104,10 +104,15 @@ The manual GitHub Actions workflow at `.github/workflows/build-windows.yml` buil
 Build a macOS `.app` from a Mac:
 
 ```bash
-pyinstaller --noconfirm --clean --windowed --name "CEIR Checker" --collect-all customtkinter --collect-all pywebview main.py
+pyinstaller --noconfirm --clean --windowed --name "CEIR Checker" --icon "../app_icon.png" --add-data "../app_icon.png:." --collect-all customtkinter --collect-all pywebview main.py
 ```
 
 Packaged output is placed in `dist/`. The SQLite database is not stored beside the executable; it is created under the current user's application-data directory.
+
+The repository-root workflow `.github/workflows/build-ceir-checker-macos.yml`
+builds two native downloads: `CEIR-Checker-macOS-Intel` for Intel Macs and
+`CEIR-Checker-macOS-Apple-Silicon` for M-series Macs. Each artifact contains a
+ZIP created with macOS `ditto`, preserving the `.app` bundle permissions and metadata.
 
 ## Data location
 

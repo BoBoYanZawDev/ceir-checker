@@ -105,6 +105,11 @@ pyinstaller --noconfirm --clean --windowed --name "CEIR Mobile Tax Calculator" -
 
 Packaged output is placed in `dist/`. The SQLite database is not stored beside the executable; it is created under the current user's application-data directory.
 
+The repository-root workflow `.github/workflows/build-ceir-tax-calculator-macos.yml`
+builds native Intel and Apple Silicon versions. Download
+`CEIR-Tax-Calculator-macOS-Intel` for Intel Macs or
+`CEIR-Tax-Calculator-macOS-Apple-Silicon` for M-series Macs.
+
 ## Data location
 
 - Windows: `%LOCALAPPDATA%\CEIRMobileTaxCalculator\app.db`

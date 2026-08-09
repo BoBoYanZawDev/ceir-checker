@@ -2,10 +2,25 @@ name: Build CEIR Checker for Windows
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "ceir_checker_pro/**"
+      - "app_icon.png"
+      - ".github/workflows/build-ceir-checker-windows.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ceir_checker_pro
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -15,7 +30,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-dev.txt
+          cache-dependency-path: ceir_checker_pro/requirements-dev.txt
 
       - name: Install build dependencies
         run: |
@@ -43,5 +58,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CEIR-Checker-Windows
-          path: dist/CEIR Checker.exe
+          path: ceir_checker_pro/dist/CEIR Checker.exe
           if-no-files-found: error
+          retention-days: 14

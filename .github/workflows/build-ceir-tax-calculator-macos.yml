@@ -1,0 +1,90 @@
+name: Build CEIR Tax Calculator for macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "ceir_tax_calculator/**"
+      - ".github/workflows/build-ceir-tax-calculator-macos.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            architecture: x86_64
+            label: Intel
+            artifact: CEIR-Tax-Calculator-macOS-Intel
+          - runner: macos-15
+            architecture: arm64
+            label: Apple-Silicon
+            artifact: CEIR-Tax-Calculator-macOS-Apple-Silicon
+
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: ceir_tax_calculator
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ceir_tax_calculator/requirements-dev.txt
+
+      - name: Verify runner architecture
+        run: |
+          python -c "import platform; actual=platform.machine(); expected='${{ matrix.architecture }}'; print(f'Building on {actual}'); assert actual == expected, f'Expected {expected}, got {actual}'"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build macOS application
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --windowed
+          --name "CEIR Mobile Tax Calculator"
+          --osx-bundle-identifier "com.ceir.taxcalculator"
+          --target-arch "${{ matrix.architecture }}"
+          --collect-all customtkinter
+          --collect-all pywebview
+          main.py
+
+      - name: Ad-hoc sign application
+        run: |
+          codesign --force --deep --sign - "dist/CEIR Mobile Tax Calculator.app"
+          codesign --verify --deep --strict "dist/CEIR Mobile Tax Calculator.app"
+
+      - name: Package macOS application
+        run: >-
+          ditto -c -k --sequesterRsrc --keepParent
+          "dist/CEIR Mobile Tax Calculator.app"
+          "dist/${{ matrix.artifact }}.zip"
+
+      - name: Upload macOS application
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ceir_tax_calculator/dist/${{ matrix.artifact }}.zip
+          if-no-files-found: error
+          retention-days: 14
