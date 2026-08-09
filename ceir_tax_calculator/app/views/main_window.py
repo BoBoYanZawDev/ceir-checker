@@ -13,7 +13,7 @@ import customtkinter as ctk
 
 from app.models.calculation import ApplicantProfile, CalculationRecord, TaxResult, TaxSettings
 from app.repositories.calculation_repository import CalculationRepository
-from app.services.ceir_service import CEIRService, RegistrationTaxQuote, build_demo_registration_quote
+from app.services.ceir_service import CEIRService, RegistrationTaxQuote
 from app.services.export_service import ExportService
 from app.services.tax_service import TaxService
 from app.utils.constants import APP_NAME, CHECK_TYPES, PAGE_SIZE
@@ -658,42 +658,69 @@ class CheckView(Page):
     def get_official_tax(self) -> None:
         if not self.unpaid_imeis:
             return
+        profile = self.repository.get_applicant_profile()
+        if not profile.is_complete():
+            messagebox.showwarning(
+                "Applicant details required",
+                "Complete National ID, Full Name, Birthday, Address, and Phone in Tax Settings first.",
+                parent=self,
+            )
+            return
         imeis = list(self.unpaid_imeis)
+        noun = "registration" if len(imeis) == 1 else "registrations"
+        if not messagebox.askyesno(
+            "Submit CEIR registration",
+            f"This will submit {len(imeis)} official CEIR tax {noun}, one for each unpaid IMEI. Continue?",
+            parent=self,
+        ):
+            return
         self.official_tax_button.configure(state="disabled", text="Loading…")
-        self.result_status.configure(text="Generating demo tax estimate…", text_color=AMBER)
-        threading.Thread(target=self._official_tax_worker, args=(imeis,), daemon=True).start()
+        self.result_status.configure(text="Submitting official CEIR tax registration…", text_color=AMBER)
+        threading.Thread(
+            target=self._official_tax_worker,
+            args=(imeis, profile.to_api_payload()),
+            daemon=True,
+        ).start()
 
-    def _official_tax_worker(self, imeis: list[str]) -> None:
-        # NOTE: this is a demo stub (build_demo_registration_quote), not a live CEIR call.
-        # CEIRService.create_registration_request() + the Applicant Details settings are
-        # the real implementation for when this is ready to actually submit a registration -
-        # until then, this always uses fake data regardless of what Settings holds.
-        quote = build_demo_registration_quote(imeis)
-        self.repository.add(CalculationRecord(
-            check_type="REGISTRATION REQUEST", imei_or_app_id=quote.declaration_id,
-            base_price=0, customs_duty=quote.customs_duty, commercial_tax=quote.commercial_tax,
-            redemption_fee=quote.redemption_fee, income_tax=quote.income_tax, total_tax=quote.total_tax,
-            taxation_status=False, network_status=None,
-            check_message=json.dumps({"imeis": imeis, **quote.raw}, ensure_ascii=False),
-        ))
-        self.after(0, self._finish_official_tax, quote, "")
+    def _official_tax_worker(self, imeis: list[str], applicant: dict) -> None:
+        quotes: list[RegistrationTaxQuote] = []
+        errors: list[str] = []
+        for imei in imeis:
+            try:
+                quote = self.service.create_registration_request([[imei]], applicant)
+                self.repository.add(CalculationRecord(
+                    check_type="REGISTRATION REQUEST", imei_or_app_id=quote.declaration_id,
+                    customs_duty=quote.customs_duty, commercial_tax=quote.commercial_tax,
+                    redemption_fee=quote.redemption_fee, income_tax=quote.income_tax,
+                    total_tax=quote.total_tax, taxation_status=False, network_status=None,
+                    check_message=json.dumps({"imei": imei, "response": quote.raw}, ensure_ascii=False),
+                ))
+                quotes.append(quote)
+            except Exception as exc:
+                errors.append(f"{imei}: {exc}")
+        self.after(0, self._finish_official_tax, quotes, "\n".join(errors))
 
-    def _finish_official_tax(self, quote: RegistrationTaxQuote | None, error: str) -> None:
+    def _finish_official_tax(self, quotes: list[RegistrationTaxQuote], error: str) -> None:
         if self.unpaid_imeis:
             self.official_tax_button.configure(state="normal", text=f"Get Official Tax ({len(self.unpaid_imeis)})")
         else:
             self.official_tax_button.configure(state="disabled", text="Get Official Tax")
-        if quote is None:
-            self.result_status.configure(text=f"Could not generate estimate: {error}", text_color=RED)
-            messagebox.showerror("Tax estimate failed", error, parent=self)
+        if not quotes:
+            self.result_status.configure(text=f"Could not create registration: {error}", text_color=RED)
+            messagebox.showerror("CEIR registration failed", error, parent=self)
             return
-        self.result_status.configure(text="Demo tax estimate generated.", text_color=GREEN)
+        if error:
+            self.result_status.configure(text="Some CEIR tax registrations failed.", text_color=AMBER)
+            messagebox.showwarning("Some registrations failed", error, parent=self)
+        else:
+            self.result_status.configure(text="Official CEIR tax registration created.", text_color=GREEN)
         self.on_saved()
-        self._show_registration_quote(quote)
+        for quote in quotes:
+            self._show_registration_quote(quote)
 
     def _show_registration_quote(self, quote: RegistrationTaxQuote) -> None:
         dialog = ctk.CTkToplevel(self)
-        dialog.title("Official Tax Estimate")
+        dialog.title("Official CEIR Tax")
         dialog.geometry("420x480")
         dialog.transient(self.winfo_toplevel())
         rows = [
@@ -712,6 +739,9 @@ class CheckView(Page):
         ctk.CTkLabel(
             dialog, text=format_mmk(quote.total_tax), font=ctk.CTkFont(size=26, weight="bold"), text_color=GREEN,
         ).pack(anchor="w", padx=20, pady=(0, 20))
+        ctk.CTkLabel(dialog, text=f"App ID: {quote.declaration_id}", text_color=("#64748B", "#94A3B8")).pack(
+            anchor="w", padx=20, pady=(0, 12)
+        )
         ctk.CTkButton(dialog, text="Close", command=dialog.destroy).pack(fill="x", padx=20, pady=(0, 20))
 
     def _parse_identifiers(self) -> list[str]:
@@ -764,21 +794,11 @@ class CheckView(Page):
                     details["device_info"] = device_info.raw
                 if device_error:
                     details["device_info_error"] = device_error
-                quote = None
                 if result.taxation_status is False:
-                    # Demo estimate only (build_demo_registration_quote) - not a live CEIR
-                    # call, see CEIRService.create_registration_request for the real one.
-                    quote = build_demo_registration_quote([imei])
                     unpaid.append(imei)
-                    details["demo_tax_quote"] = quote.raw
                 self.repository.add(CalculationRecord(
                     check_type="SINGLE CHECK" if len(imeis) == 1 else "BATCH CHECK", imei_or_app_id=imei,
                     brand=resolved_brand, model=resolved_model,
-                    customs_duty=quote.customs_duty if quote else None,
-                    commercial_tax=quote.commercial_tax if quote else None,
-                    redemption_fee=quote.redemption_fee if quote else None,
-                    income_tax=quote.income_tax if quote else None,
-                    total_tax=quote.total_tax if quote else None,
                     taxation_status=result.taxation_status, network_status=result.network_status,
                     check_message=json.dumps(details, ensure_ascii=False),
                 ))
@@ -787,7 +807,7 @@ class CheckView(Page):
                 self.after(
                     0, self._append_result, imei, resolved_brand, resolved_model,
                     result.payment_state, result.block_state,
-                    None, quote.total_tax if quote else None,
+                    None, None,
                     result.taxation_status, result.network_status, allocation_date,
                 )
             except Exception as exc:

@@ -3,6 +3,7 @@ import io
 import urllib.parse
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 from app.services.ceir_service import CEIRService
 
@@ -59,6 +60,15 @@ def test_multiple_imeis_are_each_sent_as_their_own_altcha_request(monkeypatch) -
     assert len(set(tokens_used)) == 2
     assert [result.imei for result in results] == imeis
     assert all(result.network_status is True for result in results)
+    assert all(result.taxation_status is False for result in results)
+
+
+def test_not_tax_paid_is_never_misread_as_paid() -> None:
+    result = CEIRService._to_check_result(
+        "123456789012345",
+        {"IMEI": "123456789012345", "paymentState": "NOT_TAX_PAID", "blockState": "UNBLOCKED"},
+    )
+    assert result.taxation_status is False
 
 
 def test_check_imeis_reports_one_failure_without_aborting_others(monkeypatch) -> None:
@@ -133,6 +143,69 @@ def test_device_info_falls_back_to_fresh_altcha(monkeypatch) -> None:
     assert queries == [
         {"altcha": ["null"], "imei": ["350782287836844"]},
         {"altcha": ["device-token"], "imei": ["350782287836844"]},
+    ]
+
+
+def test_same_device_sends_both_device_tacs(monkeypatch) -> None:
+    service = CEIRService()
+    tacs = {"111111111111111": "11111111", "222222222222222": "22222222"}
+    monkeypatch.setattr(service, "get_device_info", lambda imei: SimpleNamespace(tac=tacs[imei]))
+    monkeypatch.setattr(service, "_challenge", lambda: {"challenge": "x", "salt": "x"})
+    monkeypatch.setattr(service, "_solve", lambda _challenge: "same-device-token")
+    requested_url = ""
+
+    def fake_request(request):
+        nonlocal requested_url
+        requested_url = request.full_url
+        return True
+
+    monkeypatch.setattr(service, "_json_request", fake_request)
+    assert service.are_same_device(list(tacs)) is True
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(requested_url).query)
+    assert query == {"altcha": ["same-device-token"], "tacs": ["11111111", "22222222"]}
+
+
+def test_same_device_sends_a_shared_tac_once(monkeypatch) -> None:
+    service = CEIRService()
+    monkeypatch.setattr(service, "get_device_info", lambda _imei: SimpleNamespace(tac="35317365"))
+    monkeypatch.setattr(service, "_challenge", lambda: {"challenge": "x", "salt": "x"})
+    monkeypatch.setattr(service, "_solve", lambda _challenge: "token")
+    requested_url = ""
+
+    def fake_request(request):
+        nonlocal requested_url
+        requested_url = request.full_url
+        return True
+
+    monkeypatch.setattr(service, "_json_request", fake_request)
+    assert service.are_same_device(["353173651111111", "353173652222222"])
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(requested_url).query)
+    assert query["tacs"] == ["35317365"]
+
+
+def test_filter_api_methods_use_dependent_codes(monkeypatch) -> None:
+    service = CEIRService()
+    monkeypatch.setattr(service, "_challenge", lambda: {"challenge": "x", "salt": "x"})
+    monkeypatch.setattr(service, "_solve", lambda _challenge: "filter-token")
+    requested_urls: list[str] = []
+
+    def fake_request(request):
+        requested_urls.append(request.full_url)
+        return []
+
+    monkeypatch.setattr(service, "_json_request", fake_request)
+    service.get_regions()
+    service.get_townships(12)
+    service.get_document_types()
+    service.get_tax_regions()
+    service.get_tax_offices("MMR013")
+    queries = [urllib.parse.parse_qs(urllib.parse.urlsplit(url).query) for url in requested_urls]
+    assert queries == [
+        {"altcha": ["filter-token"]},
+        {"regionCode": ["12"], "altcha": ["filter-token"]},
+        {"altcha": ["filter-token"]},
+        {"altcha": ["filter-token"]},
+        {"regionCode": ["MMR013"], "altcha": ["filter-token"]},
     ]
 
 
@@ -289,3 +362,64 @@ def test_registration_status_maps_tax_and_device_fields(monkeypatch) -> None:
     assert status.taxation_status is True
     assert status.confirmed_at == "2026-07-16"
     assert status.payment_at == "2026-07-17"
+
+
+def test_initialize_payment_builds_official_ird_html(monkeypatch, tmp_path) -> None:
+    service = CEIRService()
+    monkeypatch.setattr(service, "get_registration_status", lambda _declaration_id: SimpleNamespace(declaration_hash="dec-hash"))
+    monkeypatch.setattr(service, "_json_request", lambda _request: {"fullName": "Example User"})
+    monkeypatch.setattr(service, "_challenge", lambda: {"challenge": "x", "salt": "x"})
+    monkeypatch.setattr(service, "_solve", lambda _challenge: "payment-token")
+    requests: list[urllib.request.Request] = []
+
+    def fake_text_request(request):
+        requests.append(request)
+        if "/phub/payment?" in request.full_url:
+            return "<html><head><title>IRD</title></head><body>Payment form</body></html>"
+        return ""
+
+    monkeypatch.setattr(service, "_text_request", fake_text_request)
+    destination = tmp_path / "payment.html"
+    monkeypatch.setattr(
+        "app.services.ceir_service.tempfile.NamedTemporaryFile",
+        lambda **_kwargs: destination.open("w", encoding="utf-8"),
+    )
+
+    path = service.initialize_payment("MM-CR-TEST")
+    assert path == str(destination)
+    assert "payment-check-result" in requests[0].full_url
+    assert "altcha=payment-token" in requests[1].full_url
+    assert json.loads(requests[1].data.decode()) == {"fullName": "Example User"}
+    assert '<base href="https://ceir.gov.mm/">' in destination.read_text(encoding="utf-8")
+
+
+def test_initialize_payment_reuses_fresh_registration_context(monkeypatch, tmp_path) -> None:
+    service = CEIRService()
+    monkeypatch.setattr(
+        service, "get_registration_status",
+        lambda _declaration_id: (_ for _ in ()).throw(AssertionError("status API should be skipped")),
+    )
+    monkeypatch.setattr(
+        service, "_json_request",
+        lambda _request: (_ for _ in ()).throw(AssertionError("applicant API should be skipped")),
+    )
+    monkeypatch.setattr(service, "_challenge", lambda: {"challenge": "x", "salt": "x"})
+    monkeypatch.setattr(service, "_solve", lambda _challenge: "fast-token")
+    requests: list[urllib.request.Request] = []
+
+    def fake_text_request(request):
+        requests.append(request)
+        return "<html><head></head><body>IRD payment</body></html>" if "/phub/payment?" in request.full_url else ""
+
+    monkeypatch.setattr(service, "_text_request", fake_text_request)
+    destination = tmp_path / "fast-payment.html"
+    monkeypatch.setattr(
+        "app.services.ceir_service.tempfile.NamedTemporaryFile",
+        lambda **_kwargs: destination.open("w", encoding="utf-8"),
+    )
+    applicant = {"fullName": "Fast User"}
+    path = service.initialize_payment("MM-CR-FAST", "fresh-hash", applicant)
+    assert path == str(destination)
+    assert len(requests) == 2
+    assert "declarationHash=fresh-hash" in requests[0].full_url
+    assert json.loads(requests[1].data.decode()) == applicant

@@ -7,6 +7,7 @@ import json
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -17,11 +18,20 @@ from dataclasses import dataclass
 import certifi
 
 from app.utils.constants import (
+    CEIR_APPLICANT_URL,
     CEIR_BASE_URL,
     CEIR_CHALLENGE_URL,
     CEIR_DEVICE_INFO_URL,
+    CEIR_DOCUMENT_TYPE_URL,
+    CEIR_PAYMENT_CHECK_URL,
+    CEIR_PAYMENT_URL,
+    CEIR_REGION_URL,
     CEIR_REGISTRATION_REQUEST_URL,
     CEIR_REGISTRATION_STATUS_URL,
+    CEIR_SAME_DEVICE_URL,
+    CEIR_TAX_OFFICE_URL,
+    CEIR_TAX_REGION_URL,
+    CEIR_TOWNSHIP_URL,
     CEIR_VERIFY_URL,
 )
 
@@ -106,7 +116,7 @@ class CEIRService:
         self._browser_lock = threading.RLock()
         self._pending_challenge: dict | None = None
 
-    def _json_request(self, request: urllib.request.Request) -> dict:
+    def _json_request(self, request: urllib.request.Request) -> dict | list | bool:
         if self._browser is not None:
             return self._browser_json_request(request)
         try:
@@ -133,7 +143,7 @@ class CEIRService:
         except json.JSONDecodeError as exc:
             raise RuntimeError("CEIR returned an unreadable response.") from exc
 
-    def _browser_json_request(self, request: urllib.request.Request) -> dict:
+    def _browser_json_request(self, request: urllib.request.Request) -> dict | list | bool:
         """Run a CEIR request inside the embedded webview so Cloudflare cookies are included."""
         body = request.data.decode("utf-8") if request.data is not None else None
         command = {
@@ -170,6 +180,45 @@ class CEIRService:
             return json.loads(detail)
         except json.JSONDecodeError as exc:
             raise RuntimeError("CEIR returned an unreadable response.") from exc
+
+    def _text_request(self, request: urllib.request.Request) -> str:
+        """Return a successful CEIR response without forcing JSON decoding."""
+        if self._browser is None:
+            try:
+                with self.opener.open(request, timeout=self.timeout) as response:
+                    return response.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"CEIR returned HTTP {exc.code}: {detail.strip()[:200] or exc.reason or 'Unknown error'}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"Could not connect to CEIR: {exc.reason}") from exc
+
+        body = request.data.decode("utf-8") if request.data is not None else None
+        command = {
+            "action": "request",
+            "method": request.get_method(),
+            "url": request.full_url,
+            "headers": dict(request.header_items()),
+            "body": body,
+        }
+        with self._browser_lock:
+            result = self._send_command(command)
+        if result.get("error"):
+            raise RuntimeError(f"Could not connect to CEIR: {result['error']}")
+        status = int(result.get("status") or 0)
+        detail = str(result.get("text") or "")
+        if status >= 400:
+            if status == 403 and self._is_geo_blocked(detail):
+                raise RuntimeError("CEIR is only accessible from Myanmar. Turn off your VPN and try again.")
+            try:
+                error_data = json.loads(detail)
+            except json.JSONDecodeError:
+                error_data = {}
+            message = error_data.get("message") or error_data.get("error")
+            raise RuntimeError(str(message) if message else f"CEIR returned HTTP {status}: {detail.strip()[:200] or 'Unknown error'}")
+        return detail
 
     @staticmethod
     def _worker_command() -> list[str]:
@@ -322,7 +371,14 @@ class CEIRService:
         block = str(item.get("blockState", "UNKNOWN"))
         payment_upper = payment.upper()
         block_upper = block.upper()
-        taxation = None if payment_upper == "UNKNOWN" else not any(word in payment_upper for word in ("FAIL", "BLOCK", "UNPAID"))
+        if payment_upper == "UNKNOWN":
+            taxation = None
+        else:
+            unpaid_markers = ("UNPAID", "NOT_", "PENDING", "ACCUMULATION", "DUE")
+            taxation = not any(marker in payment_upper for marker in unpaid_markers) and (
+                payment_upper in {"PAID", "PAYMENT_SUCCESS", "COMPLETED"}
+                or payment_upper.endswith("_PAID")
+            )
         network = None if block_upper == "UNKNOWN" else "UNBLOCKED" in block_upper or block_upper in {"PASS", "OK"}
         return CheckResult(
             imei=str(item.get("IMEI", imei)), payment_state=payment, block_state=block,
@@ -404,6 +460,47 @@ class CEIRService:
             raw=data,
         )
 
+    def are_same_device(self, imeis: list[str]) -> bool:
+        """Return CEIR's same-device decision for exactly two IMEIs."""
+        if len(imeis) != 2:
+            raise ValueError("Same-device validation requires exactly two IMEIs.")
+        # Dual-SIM IMEIs commonly share one TAC; CEIR's documented request sends
+        # that TAC once. Preserve order while removing duplicates.
+        tacs = list(dict.fromkeys(self.get_device_info(imei).tac or imei[:8] for imei in imeis))
+        token = self._solve(self._challenge())
+        query = urllib.parse.urlencode({"altcha": token, "tacs": tacs}, doseq=True)
+        response = self._json_request(urllib.request.Request(f"{CEIR_SAME_DEVICE_URL}?{query}", headers=self.headers))
+        if isinstance(response, bool):
+            return response
+        if isinstance(response, dict):
+            value = response.get("sameDevice", response.get("result", response.get("data")))
+            if isinstance(value, bool):
+                return value
+        raise RuntimeError("CEIR returned an unreadable same-device response.")
+
+    def _protected_list(self, url: str, **parameters: object) -> list[dict]:
+        token = self._solve(self._challenge())
+        query = urllib.parse.urlencode({**parameters, "altcha": token})
+        response = self._json_request(urllib.request.Request(f"{url}?{query}", headers=self.headers))
+        if not isinstance(response, list):
+            raise RuntimeError("CEIR returned an unreadable filter response.")
+        return [item for item in response if isinstance(item, dict)]
+
+    def get_regions(self) -> list[dict]:
+        return self._protected_list(CEIR_REGION_URL)
+
+    def get_townships(self, region_code: int | str) -> list[dict]:
+        return self._protected_list(CEIR_TOWNSHIP_URL, regionCode=region_code)
+
+    def get_document_types(self) -> list[dict]:
+        return self._protected_list(CEIR_DOCUMENT_TYPE_URL)
+
+    def get_tax_regions(self) -> list[dict]:
+        return self._protected_list(CEIR_TAX_REGION_URL)
+
+    def get_tax_offices(self, region_code: str) -> list[dict]:
+        return self._protected_list(CEIR_TAX_OFFICE_URL, regionCode=region_code)
+
     @staticmethod
     def _has_device_info(data: dict) -> bool:
         return bool(data.get("tac") or data.get("gsmaBrandName") or data.get("gsmaModelName"))
@@ -419,6 +516,18 @@ class CEIRService:
         if not isinstance(status, dict) or not any(key in status for key in status_fields):
             message = data.get("message") or data.get("error") or "No registration status was returned."
             raise RuntimeError(str(message))
+        declaration_hash = str(status.get("declarationHash") or status.get("DeclarationHash") or "")
+        if declaration_hash:
+            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+            try:
+                applicant = self._json_request(
+                    urllib.request.Request(f"{CEIR_APPLICANT_URL}?{applicant_query}", headers=self.headers)
+                )
+            except RuntimeError:
+                applicant = None
+            if isinstance(applicant, dict):
+                status["applicant"] = applicant
+                data["applicant"] = applicant
         devices = status.get("devices") or []
         brands = list(dict.fromkeys(str(device.get("brand", "")) for device in devices if device.get("brand")))
         models = list(dict.fromkeys(str(device.get("model", "")) for device in devices if device.get("model")))
@@ -436,7 +545,7 @@ class CEIRService:
         total_tax = int((status.get("orderCalculation") or {}).get("amount") or status.get("amount") or 0)
         return RegistrationStatus(
             declaration_id=str(status.get("DeclarationID") or status.get("declarationId") or declaration_id),
-            declaration_hash=str(status.get("declarationHash", "")),
+            declaration_hash=declaration_hash,
             brand=", ".join(brands),
             model=", ".join(models),
             imeis=imeis,
@@ -511,3 +620,43 @@ class CEIRService:
         token, in order.
         """
         return [self.create_registration_request([imeis], applicant, source) for imeis in devices]
+
+    def initialize_payment(
+        self, declaration_id: str, declaration_hash: str = "", applicant: dict | None = None,
+    ) -> str:
+        """Build the IRD page, reusing fresh registration data when available."""
+        if not declaration_hash:
+            status = self.get_registration_status(declaration_id)
+            declaration_hash = status.declaration_hash
+        if not declaration_hash:
+            raise RuntimeError("CEIR did not return a declaration hash for payment.")
+
+        warmup_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+        self._text_request(urllib.request.Request(f"{CEIR_PAYMENT_CHECK_URL}?{warmup_query}", headers=self.headers))
+
+        if applicant is None:
+            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+            applicant = self._json_request(
+                urllib.request.Request(f"{CEIR_APPLICANT_URL}?{applicant_query}", headers=self.headers)
+            )
+        token = self._solve(self._challenge())
+        payment_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": token})
+        request = urllib.request.Request(
+            f"{CEIR_PAYMENT_URL}?{payment_query}",
+            data=json.dumps(applicant).encode("utf-8"),
+            headers={**self.headers, "Accept": "text/html", "Content-Type": "application/json"},
+            method="POST",
+        )
+        html = self._text_request(request)
+        if len(html.strip()) < 20:
+            raise RuntimeError("CEIR returned an empty IRD payment page.")
+        injection = '<base href="https://ceir.gov.mm/"><meta name="viewport" content="width=1280">'
+        lowered = html.lower()
+        head_at = lowered.find("<head")
+        head_end = html.find(">", head_at) if head_at >= 0 else -1
+        html = html[:head_end + 1] + injection + html[head_end + 1:] if head_end >= 0 else injection + html
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".html", prefix="ceir_ird_", delete=False
+        ) as handle:
+            handle.write(html)
+            return handle.name

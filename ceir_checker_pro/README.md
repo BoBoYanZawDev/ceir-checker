@@ -1,15 +1,19 @@
-# CEIR Mobile Tax Calculator
+# CEIR Checker
 
-A focused Windows/macOS desktop app for checking a single IMEI with Myanmar CEIR and calculating CEIR mobile customs tax. It intentionally excludes the old app's ADB and IMEI-changing automation.
+A Windows/macOS desktop app that follows the supplied CEIR Checker video flow while using the responsive light/dark visual system from `ceir_tax_calculator`.
 
 ## Features
 
-- Official CEIR multi-IMEI workflow with one fresh ALTCHA token per verification batch (the UI stays responsive)
+- Separate Single Check, Batch Check, App ID Check, and PayTax workflows
+- Official CEIR verification with a fresh ALTCHA token for every protected request
 - Exact `Decimal`/`ROUND_HALF_UP` tax calculation
 - Automatic recalculation while the base price is entered
 - Automatic CEIR GSMA lookup for manufacturer, brand, model, device type, OS, TAC, and supported IMEI count
-- IMEI input accepts comma-separated values, new-line-separated values, or both
+- IMEI input and TXT/CSV import with single/batch validation
 - APP ID CHECK tab using CEIR RegistrationStatus, including official base price, tax components, total tax, device, and payment status
+- PayTax registration for one single- or dual-SIM device using a saved or imported Applicant Profile JSON
+- Official IRD payment-page initialization after a declaration is created
+- Applicant Profile JSON load/save plus an in-app applicant editor under Settings
 - Editable customs, commercial, redemption, and optional income-tax rates
 - SQLite history with live search, type filtering, pagination, details, deletion, and filtered CSV export
 - Responsive CustomTkinter interface with light/dark mode
@@ -22,7 +26,7 @@ The CEIR service is an external government system. An internet connection is req
 Python 3.12 or newer is recommended.
 
 ```bash
-cd ceir_tax_calculator
+cd ceir_checker_pro
 python -m venv .venv
 ```
 
@@ -82,7 +86,7 @@ build_windows.bat
 The executable and its required runtime files will be created at:
 
 ```text
-dist\CEIR Mobile Tax Calculator.exe
+dist\CEIR Checker.exe
 ```
 
 This is a single-file Windows executable.
@@ -90,25 +94,25 @@ This is a single-file Windows executable.
 Equivalent manual command:
 
 ```powershell
-pyinstaller --noconfirm --clean --windowed --onefile --name "CEIR Mobile Tax Calculator" --collect-all customtkinter --collect-all pywebview main.py
+pyinstaller --noconfirm --clean --windowed --onefile --name "CEIR Checker" --collect-all customtkinter --collect-all pywebview main.py
 ```
 
 ### Build without a Windows computer
 
-The manual GitHub Actions workflow at `.github/workflows/build-windows.yml` builds on an official Windows runner. Push this directory to a GitHub repository, open **Actions → Build Windows EXE → Run workflow**, then download the `CEIR-Mobile-Tax-Calculator-Windows` artifact.
+The manual GitHub Actions workflow at `.github/workflows/build-windows.yml` builds on an official Windows runner. Push this directory as a repository, open **Actions → Build CEIR Checker for Windows → Run workflow**, then download the `CEIR-Checker-Windows` artifact.
 
 Build a macOS `.app` from a Mac:
 
 ```bash
-pyinstaller --noconfirm --clean --windowed --name "CEIR Mobile Tax Calculator" --collect-all customtkinter --collect-all pywebview main.py
+pyinstaller --noconfirm --clean --windowed --name "CEIR Checker" --collect-all customtkinter --collect-all pywebview main.py
 ```
 
 Packaged output is placed in `dist/`. The SQLite database is not stored beside the executable; it is created under the current user's application-data directory.
 
 ## Data location
 
-- Windows: `%LOCALAPPDATA%\CEIRMobileTaxCalculator\app.db`
-- macOS: `~/Library/Application Support/CEIRMobileTaxCalculator/app.db`
-- Linux: `$XDG_DATA_HOME/CEIRMobileTaxCalculator/app.db` or `~/.local/share/...`
+- Windows: `%LOCALAPPDATA%\CEIRCheckerPro\app.db`
+- macOS: `~/Library/Application Support/CEIRCheckerPro/app.db`
+- Linux: `$XDG_DATA_HOME/CEIRCheckerPro/app.db` or `~/.local/share/...`
 
 For testing, set `CEIR_TAX_DB` to override the database path.
