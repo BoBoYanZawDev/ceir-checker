@@ -22,6 +22,8 @@ python -m PyInstaller ^
   --windowed ^
   --onefile ^
   --name "CEIR Checker" ^
+  --icon "..\app_icon.png" ^
+  --add-data "..\app_icon.png;." ^
   --collect-all customtkinter ^
   --collect-all pywebview ^
   main.py

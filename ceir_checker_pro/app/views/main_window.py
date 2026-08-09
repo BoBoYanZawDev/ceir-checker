@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import calendar
 import csv
-import html
 import json
 import math
 import sys
@@ -40,10 +39,27 @@ BLUE_HOVER = "#2558D4"
 GREEN = "#059669"
 RED = "#DC2626"
 AMBER = "#D97706"
-TABLE_FONT_SIZE = 13 if sys.platform == "win32" else 11
-TABLE_HEADER_FONT_SIZE = 12 if sys.platform == "win32" else 11
-TABLE_ROW_HEIGHT = 46 if sys.platform == "win32" else 40
-TABLE_HEADER_HEIGHT = 46 if sys.platform == "win32" else 42
+# Keep the desktop UI comfortably readable on both Retina macOS displays and
+# Windows DPI configurations.  CustomTkinter scales its own fonts and widget
+# geometry with this value; native Tk table/list widgets are sized separately.
+UI_WIDGET_SCALE = 1.18
+TABLE_FONT_SIZE = 16
+TABLE_HEADER_FONT_SIZE = 15
+TABLE_ROW_HEIGHT = 54
+TABLE_HEADER_HEIGHT = 52
+NATIVE_TEXT_FONT_SIZE = 15
+
+
+def application_icon_path() -> Path | None:
+    """Locate app_icon.png in source checkouts and PyInstaller bundles."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    project_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        Path(bundle_root) / "app_icon.png" if bundle_root else None,
+        project_root / "app_icon.png",
+        project_root.parent / "app_icon.png",
+    ]
+    return next((path for path in candidates if path is not None and path.is_file()), None)
 
 
 def status_glyph(value: object) -> str:
@@ -142,7 +158,8 @@ class EditableDatePicker(ctk.CTkFrame):
         )
         self.entry.grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(
-            self, text="📅", width=42, height=38, corner_radius=8,
+            self, text="▦", width=42, height=38, corner_radius=8,
+            font=ctk.CTkFont(size=15, weight="bold"),
             fg_color=BLUE, hover_color=BLUE_HOVER, command=self._open_calendar,
         ).grid(row=0, column=1, padx=(6, 0))
         self._popup: ctk.CTkToplevel | None = None
@@ -294,7 +311,8 @@ class SearchableDropdown(ctk.CTkFrame):
         )
         self.entry.grid(row=0, column=0, padx=(3, 0), pady=2, sticky="ew")
         self.button = ctk.CTkButton(
-            self, text="⌕", width=34, height=max(28, height - 6), corner_radius=5,
+            self, text="⌕", font=ctk.CTkFont(size=14, weight="bold"),
+            width=34, height=max(28, height - 6), corner_radius=5,
             fg_color="transparent", hover_color=("#EEF4FF", "#334155"),
             text_color=("#94A3B8", "#CBD5E1"),
             command=self.toggle,
@@ -366,7 +384,7 @@ class SearchableDropdown(ctk.CTkFrame):
             bg=background, fg=self._theme_color(self._dropdown_text),
             selectbackground=self._theme_color(self._dropdown_hover),
             selectforeground=self._theme_color(self._dropdown_text),
-            exportselection=False, font=("Segoe UI", 12), yscrollcommand=scrollbar.set,
+            exportselection=False, font=("Segoe UI", NATIVE_TEXT_FONT_SIZE), yscrollcommand=scrollbar.set,
         )
         self._listbox.pack(side="left", fill="both", expand=True, padx=3, pady=3)
         scrollbar.configure(command=self._listbox.yview)
@@ -462,7 +480,19 @@ class SearchableDropdown(ctk.CTkFrame):
 
 class MainWindow(ctk.CTk):
     def __init__(self, repository: CalculationRepository) -> None:
+        # This is deliberately larger than ceir_tax_calculator.  Applying it
+        # before constructing the root keeps fonts, buttons and inputs in sync.
+        ctk.set_widget_scaling(UI_WIDGET_SCALE)
         super().__init__()
+        self._app_icon_image: tk.PhotoImage | None = None
+        icon_path = application_icon_path()
+        if icon_path is not None:
+            try:
+                self._app_icon_image = tk.PhotoImage(file=str(icon_path))
+                self.iconphoto(True, self._app_icon_image)
+            except tk.TclError:
+                # A broken/unsupported icon must never prevent the app opening.
+                self._app_icon_image = None
         self.repository = repository
         self.title(APP_NAME)
         screen_width = self.winfo_screenwidth()
@@ -589,6 +619,64 @@ class Page(ctk.CTkFrame):
             self.subtitle_label.grid(row=1, column=0, padx=30, sticky="w")
 
 
+class TopbarActionButton(ctk.CTkFrame):
+    """Compact top-bar action with independently sized, font-rendered icon."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        symbol: str,
+        text: str,
+        command: Callable[[], None],
+        width: int,
+    ) -> None:
+        self._normal_color = ("#EEF1F5", "#263449")
+        self._hover_color = ("#E1E6EC", "#334155")
+        button_cursor = (
+            "pointinghand" if sys.platform == "darwin"
+            else "hand2" if sys.platform.startswith("win")
+            else "arrow"
+        )
+        super().__init__(
+            master, width=width, height=28, corner_radius=8,
+            fg_color=self._normal_color, cursor=button_cursor,
+        )
+        self.command = command
+        self.pack_propagate(False)
+        content = ctk.CTkFrame(self, fg_color="transparent", cursor=button_cursor)
+        content.place(relx=0.5, rely=0.5, anchor="center")
+        icon = ctk.CTkLabel(
+            content, text=symbol, width=14, height=18,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=(BLUE, "#8FB0FF"), cursor=button_cursor,
+        )
+        # Symbol glyphs sit lower than normal text on both Segoe UI and the
+        # macOS system font; bottom padding optically centers the icon.
+        icon.pack(side="left", padx=(0, 2), pady=(0, 2))
+        label = ctk.CTkLabel(
+            content, text=text, height=18,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=("#374151", "#E5E7EB"), cursor=button_cursor,
+        )
+        label.pack(side="left", pady=(0, 2))
+        for widget in (self, content, icon, label):
+            widget.bind("<Button-1>", self._invoke)
+            widget.bind("<Enter>", self._enter)
+            widget.bind("<Leave>", self._leave)
+
+    def _invoke(self, _event: tk.Event) -> None:
+        self.command()
+
+    def _enter(self, _event: tk.Event) -> None:
+        self.configure(fg_color=self._hover_color)
+
+    def _leave(self, event: tk.Event) -> None:
+        x, y = self.winfo_pointerxy()
+        if not (self.winfo_rootx() <= x <= self.winfo_rootx() + self.winfo_width()
+                and self.winfo_rooty() <= y <= self.winfo_rooty() + self.winfo_height()):
+            self.configure(fg_color=self._normal_color)
+
+
 class ThemeToggle(ctk.CTkFrame):
     """Two-button theme control with distinct selected text colors."""
 
@@ -600,12 +688,14 @@ class ThemeToggle(ctk.CTkFrame):
         self.command = command
         self.pack_propagate(False)
         self.light_button = ctk.CTkButton(
-            self, text="☀ Light", width=81, height=28, corner_radius=8,
+            self, text="☀ Light",
+            width=81, height=28, corner_radius=8,
             font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self.choose("Light"),
         )
         self.light_button.pack(side="left", padx=(3, 1), pady=3)
         self.dark_button = ctk.CTkButton(
-            self, text="☾ Dark", width=81, height=28, corner_radius=8,
+            self, text="☾ Dark",
+            width=81, height=28, corner_radius=8,
             font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self.choose("Dark"),
         )
         self.dark_button.pack(side="left", padx=(1, 3), pady=3)
@@ -875,7 +965,7 @@ class LiveResultsGrid(tk.Frame):
         row = self._field_pair(row, ("Initiator", status.get("initiator") or ""), ("Login", status.get("login") or ""))
         row = self._field_pair(row, ("Method", status.get("Method") or ""), ("Payment Date", status.get("paymentDt") or ""))
         applicant = status.get("applicant") or raw.get("applicant") or {}
-        row = self._section(row + 1, "♟ Applicant Profile")
+        row = self._section(row + 1, "Applicant Profile")
         row = self._field_pair(row, ("Full Name", applicant.get("fullName") or ""), ("National ID", applicant.get("nationalId") or ""))
         row = self._field_pair(row, ("Birthday", applicant.get("birthday") or ""), ("Email", applicant.get("email") or ""))
         row = self._field_pair(row, ("Address", applicant.get("address") or ""), ("Phone", applicant.get("phone") or ""))
@@ -929,13 +1019,11 @@ class CheckView(Page):
         self.theme_switch = ThemeToggle(topbar, self._change_theme)
         self.theme_switch.pack(side="right", padx=(6, 0), pady=4)
         self.theme_switch.set(ctk.get_appearance_mode())
-        ctk.CTkButton(
-            topbar, text="⚙ Settings", width=100, height=34, fg_color=("#EEF1F5", "#263449"),
-            text_color=("#374151", "#E5E7EB"), hover_color=("#E1E6EC", "#334155"), command=self.on_settings,
+        TopbarActionButton(
+            topbar, symbol="⚙", text="Settings", width=81, command=self.on_settings,
         ).pack(side="right", padx=4, pady=4)
-        ctk.CTkButton(
-            topbar, text="▣ History", width=92, height=34, fg_color=("#EEF1F5", "#263449"),
-            text_color=("#374151", "#E5E7EB"), hover_color=("#E1E6EC", "#334155"), command=self.on_history,
+        TopbarActionButton(
+            topbar, symbol="◷", text="History", width=81, command=self.on_history,
         ).pack(side="right", padx=4, pady=4)
 
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -1050,12 +1138,12 @@ class CheckView(Page):
         self.paytax_imei1.bind("<KeyRelease>", self._update_input_count)
         self.paytax_imei2.bind("<KeyRelease>", self._update_input_count)
         ctk.CTkButton(
-            self.paytax_frame, text="▣ Choose Profile JSON", height=38,
+            self.paytax_frame, text="⇧ Choose Profile JSON", height=38,
             fg_color=("#E5E7EB", "#334155"), text_color=("#374151", "#F8FAFC"),
             hover_color=("#D8DEE8", "#475569"), command=self._import_profile_json,
         ).grid(row=3, column=0, padx=(12, 5), pady=(5, 4), sticky="ew")
         ctk.CTkButton(
-            self.paytax_frame, text="♟ Create Profile JSON", height=38,
+            self.paytax_frame, text="＋ Create Profile JSON", height=38,
             fg_color=("#E5E7EB", "#334155"), text_color=(BLUE, "#7DA2FF"),
             hover_color=("#D8DEE8", "#475569"), command=self.open_profile_editor,
         ).grid(row=3, column=1, padx=(5, 12), pady=(5, 4), sticky="ew")
@@ -1102,51 +1190,51 @@ class CheckView(Page):
         input_actions.grid(row=7, column=0, columnspan=3, padx=14, pady=(0, 8), sticky="ew")
         input_actions.grid_columnconfigure((0, 1, 2, 3), weight=1)
         self.import_button = ctk.CTkButton(
-            input_actions, text="Import File", height=38,
+            input_actions, text="⇧ Import File", height=38,
             fg_color=("#E8EEF7", "#334155"), text_color=("#1E293B", "#F8FAFC"),
             hover_color=("#D8E2F0", "#475569"), command=self.import_imei_file,
         )
         self.import_button.grid(row=0, column=0, padx=(0, 4), sticky="ew")
         self.clear_button = ctk.CTkButton(
-            input_actions, text="Clear", height=38,
+            input_actions, text="× Clear", height=38,
             fg_color=("#FDECEC", "#48252A"), text_color=("#B42318", "#FDA29B"),
             hover_color=("#FBD5D5", "#633038"), command=self.clear_input,
         )
         self.clear_button.grid(row=0, column=1, padx=4, sticky="ew")
         self.retry_button = ctk.CTkButton(
-            input_actions, text="Retry Failed", height=38, state="disabled",
+            input_actions, text="↻ Retry Failed", height=38, state="disabled",
             fg_color=AMBER, hover_color="#B45309", command=self._retry_or_edit_profile,
         )
         self.retry_button.grid(row=0, column=2, padx=4, sticky="ew")
         self.history_button = ctk.CTkButton(
-            input_actions, text="View History", height=38,
+            input_actions, text="◷ View History", height=38,
             fg_color=("#E8EEF7", "#334155"), text_color=("#1E293B", "#F8FAFC"),
             hover_color=("#D8E2F0", "#475569"), command=self.on_history,
         )
         self.history_button.grid(row=0, column=3, padx=(4, 0), sticky="ew")
         self.reload_session_button = ctk.CTkButton(
-            input_actions, text="Reload CEIR Session", height=34,
+            input_actions, text="↻ Reload CEIR Session", height=34,
             fg_color="transparent", text_color=("#475569", "#94A3B8"),
             hover_color=("#E8EEF7", "#263449"), command=self.reload_session,
         )
         self.reload_session_button.grid(row=1, column=0, columnspan=2, padx=(0, 4), pady=(6, 0), sticky="ew")
         self.official_tax_button = ctk.CTkButton(
-            input_actions, text="Pay Tax", height=34, state="disabled",
+            input_actions, text="Pay Tax  →", height=34, state="disabled",
             fg_color=AMBER, hover_color="#B45309", command=self._secondary_action,
         )
         self.official_tax_button.grid(row=1, column=2, columnspan=2, padx=(4, 0), pady=(6, 0), sticky="ew")
         self.report_button = ctk.CTkButton(
-            input_actions, text="▣ Export Report Image", height=38,
+            input_actions, text="⇩ Export PNG", height=38,
             fg_color=("#EEF1F5", "#263449"), text_color=("#374151", "#E5E7EB"),
             hover_color=("#E1E6EC", "#334155"), command=self.export_report_image,
         )
         self.csv_button = ctk.CTkButton(
-            input_actions, text="▥ Export to CSV", height=38,
+            input_actions, text="⇩ Export to CSV", height=38,
             fg_color=("#EEF1F5", "#263449"), text_color=("#374151", "#E5E7EB"),
             hover_color=("#E1E6EC", "#334155"), command=self.export_current_csv,
         )
         self.quick_paytax_button = ctk.CTkButton(
-            input_panel, text="Pay Tax →", height=36, corner_radius=8,
+            input_panel, text="Pay Tax  →", height=36, corner_radius=8,
             font=ctk.CTkFont(size=12, weight="bold"), fg_color=BLUE,
             hover_color=BLUE_HOVER, command=self.get_official_tax,
         )
@@ -1265,13 +1353,13 @@ class CheckView(Page):
         self.results_grid.set_extra_column_label("Confirmed / Paid" if is_app_id or is_paytax else "Allocation Date")
         self.failed_identifiers = []
         self.retry_button.configure(
-            text="Create Profile JSON" if is_paytax else "Retry Failed",
+            text="＋ Create Profile JSON" if is_paytax else "↻ Retry Failed",
             state="normal" if is_paytax else "disabled",
         )
         self.unpaid_imeis = []
-        self.import_button.configure(text="Load Profile JSON" if is_paytax else "Import File")
+        self.import_button.configure(text="⇧ Load Profile JSON" if is_paytax else "⇧ Import File")
         self.official_tax_button.configure(
-            text="Save Profile JSON" if is_paytax else "Pay Tax",
+            text="Save Profile JSON" if is_paytax else "Pay Tax  →",
             state="normal" if is_paytax else "disabled",
         )
         self._set_results()
@@ -1455,42 +1543,100 @@ class CheckView(Page):
 
     def export_report_image(self) -> None:
         if not self.live_results:
-            messagebox.showinfo("Export Report Image", "There are no current results to export.", parent=self)
+            messagebox.showinfo("Export PNG", "There are no current results to export.", parent=self)
             return
         path = filedialog.asksaveasfilename(
-            parent=self, title="Export Report Image", defaultextension=".svg",
-            initialfile="ceir_report.svg", filetypes=[("SVG image", "*.svg")],
+            parent=self, title="Export PNG", defaultextension=".png",
+            initialfile="ceir_report.png", filetypes=[("PNG image", "*.png")],
         )
         if not path:
             return
-        dark = ctk.get_appearance_mode() == "Dark"
-        background, foreground, muted = ("#111C2E", "#E5E7EB", "#94A3B8") if dark else ("#FFFFFF", "#1F2937", "#6B7280")
-        height = max(360, 180 + len(self.live_results) * 42)
-        lines = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="{height}" viewBox="0 0 1400 {height}">',
-            f'<rect width="1400" height="{height}" fill="{background}"/>',
-            f'<text x="48" y="58" fill="{foreground}" font-family="Segoe UI,Arial" font-size="28" font-weight="700">{APP_NAME}</text>',
-            f'<text x="48" y="91" fill="{muted}" font-family="Segoe UI,Arial" font-size="17">{html.escape(self.current_input_mode.title())} Report</text>',
-            f'<line x1="48" y1="115" x2="1352" y2="115" stroke="{muted}" stroke-opacity="0.35"/>',
-        ]
-        headers = ("IMEI / App ID", "Brand / Model", "Taxation", "Network", "Base Price", "Tax Price")
-        xs = (48, 320, 650, 820, 980, 1160)
-        for x, heading in zip(xs, headers):
-            lines.append(f'<text x="{x}" y="148" fill="{muted}" font-family="Segoe UI,Arial" font-size="15" font-weight="700">{heading}</text>')
-        for index, item in enumerate(self.live_results):
-            y = 188 + index * 42
-            values = (item.get("identifier"), item.get("device"), item.get("taxation_text"), item.get("network_text"), item.get("base_text"), item.get("tax_text"))
-            for x, value in zip(xs, values):
-                lines.append(f'<text x="{x}" y="{y}" fill="{foreground}" font-family="Segoe UI,Arial" font-size="14">{html.escape(str(value or ""))}</text>')
-            lines.append(f'<line x1="48" y1="{y + 13}" x2="1352" y2="{y + 13}" stroke="{muted}" stroke-opacity="0.18"/>')
-        lines.append("</svg>")
         try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines))
-        except OSError as exc:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            messagebox.showerror(
+                "PNG export unavailable",
+                "Pillow is required for PNG export. Reinstall the app dependencies and try again.",
+                parent=self,
+            )
+            return
+
+        dark = ctk.get_appearance_mode() == "Dark"
+        colors = {
+            "background": "#111C2E" if dark else "#FFFFFF",
+            "foreground": "#E5E7EB" if dark else "#1F2937",
+            "muted": "#94A3B8" if dark else "#64748B",
+            "header": "#17243A" if dark else "#EEF2F7",
+            "alternate": "#152238" if dark else "#F8FAFC",
+            "divider": "#334155" if dark else "#D8DEE8",
+        }
+        width, row_height, table_top = 1600, 52, 142
+        height = max(360, table_top + 50 + len(self.live_results) * row_height + 42)
+
+        def load_font(size: int, bold: bool = False):
+            candidates = (
+                ("/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNS.ttf"),
+                ("C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/segoeuib.ttf"),
+                ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+            )
+            for regular, strong in candidates:
+                try:
+                    return ImageFont.truetype(strong if bold else regular, size=size)
+                except OSError:
+                    continue
+            return ImageFont.load_default()
+
+        title_font = load_font(30, True)
+        subtitle_font = load_font(18)
+        header_font = load_font(16, True)
+        cell_font = load_font(16)
+        image = Image.new("RGB", (width, height), colors["background"])
+        draw = ImageDraw.Draw(image)
+        draw.text((48, 34), APP_NAME, fill=colors["foreground"], font=title_font)
+        draw.text(
+            (48, 78), f"{self.current_input_mode.title()} Report",
+            fill=colors["muted"], font=subtitle_font,
+        )
+        draw.rounded_rectangle((40, table_top, width - 40, height - 32), radius=12, outline=colors["divider"], width=1)
+        draw.rectangle((41, table_top + 1, width - 41, table_top + 49), fill=colors["header"])
+
+        headers = ("IMEI / App ID", "Brand / Model", "Taxation", "Network", "Base Price", "Tax Price")
+        xs = (58, 350, 730, 910, 1080, 1320)
+        column_widths = (275, 360, 160, 150, 220, 220)
+
+        def fitted_text(value: object, max_width: int) -> str:
+            text = str(value or "")
+            if draw.textlength(text, font=cell_font) <= max_width:
+                return text
+            while text and draw.textlength(f"{text}…", font=cell_font) > max_width:
+                text = text[:-1]
+            return f"{text}…"
+
+        for x, heading in zip(xs, headers):
+            draw.text((x, table_top + 15), heading, fill=colors["muted"], font=header_font)
+        for index, item in enumerate(self.live_results):
+            top = table_top + 50 + index * row_height
+            if index % 2:
+                draw.rectangle((41, top, width - 41, top + row_height), fill=colors["alternate"])
+            values = (
+                item.get("identifier"), item.get("device"), item.get("taxation_text"),
+                item.get("network_text"), item.get("base_text"), item.get("tax_text"),
+            )
+            for column, (x, value, max_width) in enumerate(zip(xs, values, column_widths)):
+                text = fitted_text(value, max_width)
+                text_color = colors["foreground"]
+                if column == 2 and text:
+                    text_color = GREEN if text.upper() in {"PAID", "VALID", "TAX PAID"} else RED
+                elif column == 3 and text:
+                    text_color = GREEN if text.upper() in {"ALLOWED", "UNBLOCKED", "VALID"} else RED
+                draw.text((x, top + 16), text, fill=text_color, font=cell_font)
+            draw.line((41, top + row_height, width - 41, top + row_height), fill=colors["divider"], width=1)
+        try:
+            image.save(path, format="PNG", optimize=True)
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Export failed", str(exc), parent=self)
             return
-        self.result_status.configure(text=f"Status: Report image exported to {path}", text_color=GREEN)
+        self.result_status.configure(text=f"Status: PNG exported to {path}", text_color=GREEN)
 
     def _import_profile_json(self) -> None:
         path = filedialog.askopenfilename(
@@ -1924,11 +2070,14 @@ class CheckView(Page):
         self._update_input_count()
         self.failed_identifiers = []
         is_paytax = self.current_input_mode == "PAYTAX"
-        self.retry_button.configure(text="Create Profile JSON" if is_paytax else "Retry Failed", state="normal" if is_paytax else "disabled")
+        self.retry_button.configure(
+            text="＋ Create Profile JSON" if is_paytax else "↻ Retry Failed",
+            state="normal" if is_paytax else "disabled",
+        )
         self.unpaid_imeis = []
         self.quick_paytax_button.grid_remove()
         self.official_tax_button.configure(
-            text="Save Profile JSON" if is_paytax else "Pay Tax",
+            text="Save Profile JSON" if is_paytax else "Pay Tax  →",
             state="normal" if is_paytax else "disabled",
         )
         self._set_results()
@@ -1954,7 +2103,7 @@ class CheckView(Page):
         self.start_check()
 
     def reload_session(self) -> None:
-        self.reload_session_button.configure(state="disabled", text="Reloading CEIR session…")
+        self.reload_session_button.configure(state="disabled", text="↻ Reloading CEIR session…")
         self.result_status.configure(text="Reloading CEIR session…", text_color=AMBER)
         threading.Thread(target=self._reload_session_worker, daemon=True).start()
 
@@ -1967,7 +2116,7 @@ class CheckView(Page):
         self.after(0, self._finish_reload_session, True, "")
 
     def _finish_reload_session(self, success: bool, message: str) -> None:
-        self.reload_session_button.configure(state="normal", text="Reload CEIR Session")
+        self.reload_session_button.configure(state="normal", text="↻ Reload CEIR Session")
         if success:
             self.result_status.configure(text="CEIR session reloaded.", text_color=GREEN)
         else:
@@ -2167,10 +2316,10 @@ class CheckView(Page):
                 return
         self.failed_identifiers = []
         self.quick_paytax_button.grid_remove()
-        self.retry_button.configure(text="Retry Failed", state="disabled")
+        self.retry_button.configure(text="↻ Retry Failed", state="disabled")
         self.unpaid_imeis = []
         if self.current_input_mode != "PAYTAX":
-            self.official_tax_button.configure(text="Pay Tax", state="disabled")
+            self.official_tax_button.configure(text="Pay Tax  →", state="disabled")
         self.check_button.configure(state="disabled", text=f"Checking 0/{len(identifiers)}…")
         self.mode_tabs.configure(state="disabled")
         self.result_status.configure(text="Status: Solving verification challenge…", text_color=AMBER)
@@ -2436,22 +2585,22 @@ class CheckView(Page):
             for error in errors:
                 self._append_error(error)
             self.failed_identifiers = [error.split(":", 1)[0] for error in errors]
-            self.retry_button.configure(text=f"Retry Failed ({len(self.failed_identifiers)})", state="normal")
+            self.retry_button.configure(text=f"↻ Retry Failed ({len(self.failed_identifiers)})", state="normal")
         else:
             self.failed_identifiers = []
-            self.retry_button.configure(text="Retry Failed", state="disabled")
+            self.retry_button.configure(text="↻ Retry Failed", state="disabled")
         self.unpaid_imeis = unpaid
         if self.current_input_mode == "IMEI CHECK" and self.tax_paid_first.get():
             self.live_results.sort(key=lambda item: item.get("taxation_good") is not True)
             self._render_result_page()
         if unpaid:
-            self.official_tax_button.configure(text=f"Pay Tax ({len(unpaid)})", state="normal")
+            self.official_tax_button.configure(text=f"Pay Tax ({len(unpaid)})  →", state="normal")
             self.quick_paytax_button.configure(
                 text="Pay Tax →" if len(unpaid) == 1 else f"Choose IMEI & Pay Tax ({len(unpaid)}) →"
             )
             self.quick_paytax_button.grid()
         else:
-            self.official_tax_button.configure(text="Pay Tax", state="disabled")
+            self.official_tax_button.configure(text="Pay Tax  →", state="disabled")
             self.quick_paytax_button.grid_remove()
         self.note.configure(text="Successful CEIR results were saved separately to History.")
         if succeeded:
@@ -2613,20 +2762,38 @@ class HistoryGrid(tk.Frame):
         self.row_widgets: dict[int, list[tk.Label]] = {}
         self.current_rows: list[dict] = []
         self.current_page = 1
+        self.current_page_size = PAGE_SIZE
+        self._filler_row = 1
         self.dark = False
         for column, width in enumerate(self.MIN_WIDTHS):
             self.grid_columnconfigure(column, weight=1 if column in {2, 4, 5, 8, 9} else 0, minsize=width)
-        self.grid_rowconfigure(13, weight=1)
 
     def configure_theme(self, dark: bool) -> None:
         self.dark = dark
-        self.render(self.current_rows, self.current_page)
+        self.render(self.current_rows, self.current_page, self.current_page_size)
 
-    def render(self, rows: list[dict], page: int) -> None:
+    def pagination_metrics(self) -> tuple[int, int]:
+        """Return actual rendered header/typical-row heights in Tk pixels."""
+        self.update_idletasks()
+        header_heights = [
+            widget.winfo_reqheight()
+            for widget in self.winfo_children()
+            if int(widget.grid_info().get("row", -1)) == 0
+        ]
+        row_heights = sorted(
+            widgets[0].winfo_reqheight() for widgets in self.row_widgets.values() if widgets
+        )
+        header_height = max(header_heights, default=TABLE_HEADER_HEIGHT)
+        row_height = row_heights[len(row_heights) // 2] if row_heights else TABLE_ROW_HEIGHT
+        return max(1, header_height), max(1, row_height)
+
+    def render(self, rows: list[dict], page: int, page_size: int) -> None:
         self.current_rows = rows
         self.current_page = page
+        self.current_page_size = page_size
         self.selected_record_id = None
         self.row_widgets.clear()
+        self.grid_rowconfigure(self._filler_row, weight=0)
         for widget in self.winfo_children():
             widget.destroy()
         background = "#111C2E" if self.dark else "#FFFFFF"
@@ -2643,6 +2810,10 @@ class HistoryGrid(tk.Frame):
             header.grid(row=0, column=column, sticky="nsew")
         for index, record in enumerate(rows):
             self._render_row(index + 1, record, border)
+        # Any space left after the last complete row is kept below the table;
+        # no data row is stretched into a tall strip.
+        self._filler_row = len(rows) + 1
+        self.grid_rowconfigure(self._filler_row, weight=1)
 
     def _render_row(self, grid_row: int, record: dict, border: str) -> None:
         row_background = ("#152238" if grid_row % 2 == 0 else "#111C2E") if self.dark else ("#F5F5F5" if grid_row % 2 == 0 else "#FFFFFF")
@@ -2654,7 +2825,7 @@ class HistoryGrid(tk.Frame):
         if registration_imeis:
             identifier = "\n".join((identifier, *registration_imeis))
         values = (
-            (self.current_page - 1) * PAGE_SIZE + grid_row,
+            (self.current_page - 1) * self.current_page_size + grid_row,
             record["id"], record["date_time"], record["check_type"], identifier,
             " ".join(part for part in (brand, model) if part),
             status_glyph(taxation), status_glyph(network),
@@ -2706,20 +2877,35 @@ class HistoryView(Page):
         self.repository = repository
         self.on_back = on_back
         self.page = 1
+        self.page_size = PAGE_SIZE
         self.total = 0
+        self._resize_after_id: str | None = None
         toolbar = ctk.CTkFrame(self, corner_radius=8, fg_color=("#FFFFFF", "#111C2E"), border_width=1, border_color=("#D8DEE8", "#263449"))
         toolbar.grid(row=2, column=0, padx=8, pady=(10, 5), sticky="ew")
         toolbar.grid_columnconfigure(2, weight=1)
         ctk.CTkButton(toolbar, text="← Back", width=82, height=40, fg_color=("#E8EEF7", "#334155"), text_color=("#1E293B", "#F8FAFC"), hover_color=("#D8E2F0", "#475569"), command=self.on_back).grid(row=0, column=0, padx=(12, 6), pady=10)
-        ctk.CTkLabel(toolbar, text="🔍  Search:", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=1, padx=(4, 8), pady=12)
+        ctk.CTkLabel(
+            toolbar, text="⌕  Search:",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=1, padx=(4, 8), pady=12)
         self.search = ctk.CTkEntry(toolbar, placeholder_text="Filter by IMEI, Brand, Model, Date, Hash…", height=40, font=ctk.CTkFont(size=13))
         self.search.grid(row=0, column=2, padx=(0, 14), pady=10, sticky="ew")
         self.search.bind("<KeyRelease>", lambda _event: self.reset_page())
-        ctk.CTkLabel(toolbar, text="🏷  Type:", font=ctk.CTkFont(size=14, weight="bold")).grid(row=0, column=3, padx=(0, 7), pady=12)
+        ctk.CTkLabel(
+            toolbar, text="◇  Type:",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=3, padx=(0, 7), pady=12)
         self.type_filter = ctk.CTkOptionMenu(toolbar, values=["ALL", *CHECK_TYPES], width=205, height=40, command=lambda _value: self.reset_page())
         self.type_filter.grid(row=0, column=4, padx=(0, 10), pady=10)
-        ctk.CTkButton(toolbar, text="⬇  Export CSV", width=125, height=40, fg_color=("#E8EEF7", "#334155"), text_color=("#1E293B", "#F8FAFC"), hover_color=("#D8E2F0", "#475569"), command=self.export).grid(row=0, column=5, padx=4, pady=10)
-        ctk.CTkButton(toolbar, text="🗑  Clear History", width=135, height=40, fg_color=RED, hover_color="#B91C1C", command=self.clear).grid(row=0, column=6, padx=(4, 14), pady=10)
+        ctk.CTkButton(
+            toolbar, text="⇩ Export CSV",
+            width=132, height=40, fg_color=("#E8EEF7", "#334155"),
+            text_color=("#1E293B", "#F8FAFC"), hover_color=("#D8E2F0", "#475569"), command=self.export,
+        ).grid(row=0, column=5, padx=4, pady=10)
+        ctk.CTkButton(
+            toolbar, text="× Clear History",
+            width=142, height=40, fg_color=RED, hover_color="#B91C1C", command=self.clear,
+        ).grid(row=0, column=6, padx=(4, 14), pady=10)
         table_frame = ctk.CTkFrame(self, corner_radius=5, border_width=1, border_color=("#D1D7E0", "#263449"))
         table_frame.grid(row=3, column=0, padx=8, pady=3, sticky="nsew")
         self.grid_rowconfigure(3, weight=1)
@@ -2727,6 +2913,7 @@ class HistoryView(Page):
         table_frame.grid_rowconfigure(0, weight=1)
         self.table = HistoryGrid(table_frame, self.open_detail)
         self.table.grid(row=0, column=0, sticky="nsew")
+        table_frame.bind("<Configure>", self._schedule_page_resize)
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.grid(row=4, column=0, padx=8, pady=(5, 8), sticky="ew")
         footer.grid_columnconfigure(1, weight=1)
@@ -2752,9 +2939,12 @@ class HistoryView(Page):
         self.refresh()
 
     def refresh(self) -> None:
-        rows, self.total = self.repository.list_filtered(self.search.get(), self.type_filter.get(), self.page, PAGE_SIZE)
-        self.table.render(rows, self.page)
-        pages = max(1, math.ceil(self.total / PAGE_SIZE))
+        rows, self.total = self.repository.list_filtered(
+            self.search.get(), self.type_filter.get(), self.page, self.page_size
+        )
+        had_rendered_rows = bool(self.table.current_rows)
+        self.table.render(rows, self.page, self.page_size)
+        pages = max(1, math.ceil(self.total / self.page_size))
         if self.page > pages:
             self.page = pages
             self.refresh()
@@ -2762,6 +2952,33 @@ class HistoryView(Page):
         self.page_label.configure(text=f"Page {self.page} of {pages} (Total Records: {self.total})")
         self.prev.configure(state="normal" if self.page > 1 else "disabled")
         self.next.configure(state="normal" if self.page < pages else "disabled")
+        # Re-measure after data is rendered too: an initially empty table has
+        # no row from which Tk can report the platform's real row height.
+        if rows and not had_rendered_rows:
+            self._queue_page_resize(int(self.table.master.winfo_height()))
+
+    def _schedule_page_resize(self, event: tk.Event) -> None:
+        """Debounce geometry events before recalculating the history page size."""
+        self._queue_page_resize(int(event.height))
+
+    def _queue_page_resize(self, height: int) -> None:
+        if height < TABLE_HEADER_HEIGHT + TABLE_ROW_HEIGHT * 2:
+            return
+        if self._resize_after_id is not None:
+            self.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.after(100, lambda: self._resize_page_to_height(height))
+
+    def _resize_page_to_height(self, height: int) -> None:
+        self._resize_after_id = None
+        header_height, row_height = self.table.pagination_metrics()
+        available_rows = max(1, (height - header_height) // row_height)
+        if available_rows == self.page_size:
+            return
+        # Keep the previously visible first record on screen when resizing.
+        first_record_index = (self.page - 1) * self.page_size
+        self.page_size = available_rows
+        self.page = first_record_index // self.page_size + 1
+        self.refresh()
 
     def change_page(self, amount: int) -> None:
         self.page += amount
@@ -2815,7 +3032,7 @@ class HistoryView(Page):
         dialog.title(f"Calculation #{record_id}")
         dialog.geometry("570x610")
         dialog.transient(self.winfo_toplevel())
-        box = ctk.CTkTextbox(dialog, wrap="word", font=("Segoe UI", 13))
+        box = ctk.CTkTextbox(dialog, wrap="word", font=("Segoe UI", NATIVE_TEXT_FONT_SIZE))
         box.pack(fill="both", expand=True, padx=18, pady=18)
         labels = {
             "id": "ID", "date_time": "Date Time", "check_type": "Type", "imei_or_app_id": "IMEI / App ID",
