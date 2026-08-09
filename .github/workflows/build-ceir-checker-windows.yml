@@ -2,14 +2,6 @@ name: Build CEIR Checker for Windows
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "ceir_checker_pro/**"
-      - "app_icon.png"
-      - ".github/workflows/build-ceir-checker-windows.yml"
 
 permissions:
   contents: read

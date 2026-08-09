@@ -2,13 +2,6 @@ name: Build CEIR Tax Calculator for Windows
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "ceir_tax_calculator/**"
-      - ".github/workflows/build-ceir-tax-calculator-windows.yml"
 
 permissions:
   contents: read

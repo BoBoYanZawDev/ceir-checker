@@ -2,13 +2,6 @@ name: Build CEIR Tax Calculator for macOS
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "ceir_tax_calculator/**"
-      - ".github/workflows/build-ceir-tax-calculator-macos.yml"
 
 permissions:
   contents: read
