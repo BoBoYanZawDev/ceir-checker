@@ -41,7 +41,7 @@ Client                       CEIR
   |                            |
   | solve SHA256 PoW locally   |
   |                            |
-  | request ?altcha=<token>    |
+  | request ?altchaData=<token>|
   |--------------------------->|
 ```
 
@@ -52,7 +52,7 @@ SHA256(salt + number) == challenge
 ```
 
 The solved payload contains these fields and is Base64-encoded before being
-placed in the `altcha` query parameter:
+placed in the `altchaData` query parameter:
 
 ```json
 {
@@ -96,9 +96,11 @@ generation up to three times with short backoff delays.
 ### 3.2 Verify IMEIs
 
 ```http
-POST /openapi/API/IMEI/Verify?altcha={ALTCHA_TOKEN}
+POST /openapi/API/IMEI/Verify?altchaData={ALTCHA_TOKEN}
 Content-Type: application/json
 ```
+
+Protected endpoints use `altchaData` for the solved ALTCHA token.
 
 Request body: a JSON array of IMEI strings. One batch may contain both IMEIs of
 each phone.
@@ -132,7 +134,7 @@ Known application values:
 ### 3.3 Get device information
 
 ```http
-GET /openapi/API/Device/personal-device-info?altcha={TOKEN_OR_NULL}&imei={IMEI}
+GET /openapi/API/Device/personal-device-info?altchaData={TOKEN_OR_NULL}&imei={IMEI}
 ```
 
 Query parameters:
@@ -140,7 +142,7 @@ Query parameters:
 | Name | Required | Description |
 | --- | --- | --- |
 | `imei` | Yes | A Luhn-valid 15-digit IMEI. |
-| `altcha` | Yes | A solved ALTCHA token, or literal `null` when the endpoint allows the fast path. |
+| `altchaData` | Yes | A solved ALTCHA token, or literal `null` when the endpoint allows the fast path. |
 
 Fields used by this app:
 
@@ -154,13 +156,13 @@ Fields used by this app:
 }
 ```
 
-The app first attempts `altcha=null`. If that does not return usable data, it
+The app first attempts `altchaData=null`. If that does not return usable data, it
 fetches and solves a fresh ALTCHA challenge for each TAC lookup.
 
 ### 3.4 Create an IMEI registration request
 
 ```http
-POST /openapi/API/IMEI/RegistrationRequest?source=LEGAL_INDIVIDUAL&altcha={ALTCHA_TOKEN}
+POST /openapi/API/IMEI/RegistrationRequest?source=LEGAL_INDIVIDUAL&altchaData={ALTCHA_TOKEN}
 Content-Type: application/json
 ```
 
@@ -232,7 +234,7 @@ to three times. Other `4xx` responses are treated as final API responses.
 ### 3.5 Get registration/payment status
 
 ```http
-GET /openapi/API/IMEI/RegistrationStatus?DeclarationID={DECLARATION_ID}&altcha={ALTCHA_TOKEN}
+GET /openapi/API/IMEI/RegistrationStatus?DeclarationID={DECLARATION_ID}&altchaData={ALTCHA_TOKEN}
 ```
 
 Response may contain the status object at the root or under `RequestStatus`.
@@ -267,7 +269,7 @@ Fields consumed by the app include:
 ### 3.6 Get applicant data
 
 ```http
-GET /openapi/API/request/applicant?declarationHash={DECLARATION_HASH}&altcha=null
+GET /openapi/API/request/applicant?declarationHash={DECLARATION_HASH}&altchaData=null
 ```
 
 The declaration hash is obtained from Registration Status. The response is the
@@ -277,7 +279,7 @@ preserves unknown fields when editing it.
 ### 3.7 Update/confirm applicant data
 
 ```http
-POST /openapi/API/request/applicant?declarationHash={DECLARATION_HASH}&altcha={ALTCHA_TOKEN}
+POST /openapi/API/request/applicant?declarationHash={DECLARATION_HASH}&altchaData={ALTCHA_TOKEN}
 Content-Type: application/json
 ```
 
@@ -300,7 +302,7 @@ but the HTTP call succeeds, the application returns the locally merged object.
 ### 3.8 Check payment result
 
 ```http
-GET /openapi/API/phub/payment-check-result?declarationHash={DECLARATION_HASH}&altcha=null
+GET /openapi/API/phub/payment-check-result?declarationHash={DECLARATION_HASH}&altchaData=null
 ```
 
 This endpoint is called as a payment-flow warm-up in the current implementation.
@@ -309,7 +311,7 @@ Its response is not parsed.
 ### 3.9 Initialize Payment Hub
 
 ```http
-POST /openapi/API/phub/payment?declarationHash={DECLARATION_HASH}&altcha={ALTCHA_TOKEN}
+POST /openapi/API/phub/payment?declarationHash={DECLARATION_HASH}&altchaData={ALTCHA_TOKEN}
 Content-Type: application/json
 ```
 

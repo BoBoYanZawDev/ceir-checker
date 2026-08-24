@@ -121,3 +121,7 @@ ZIP created with macOS `ditto`, preserving the `.app` bundle permissions and met
 - Linux: `$XDG_DATA_HOME/CEIRCheckerPro/app.db` or `~/.local/share/...`
 
 For testing, set `CEIR_TAX_DB` to override the database path.
+
+When running from source, server error responses are written to `ceir-checker.log` in the application-data directory. Logs rotate at 1 MB, with up to three backups retained; ALTCHA query tokens and request payloads are not logged. Packaged builds do not create or emit log files.
+
+For source-only API debugging, run `python main.py --debug`. This writes the complete request method, API URL, query parameters, request data, HTTP status, and response to `ceir-api-debug.log` beside `main.py` in the `ceir_checker_pro` folder. The detailed log can contain ALTCHA tokens and applicant data, so do not share it without reviewing it first. Detailed API logging is disabled in PyInstaller builds even if `--debug` is supplied.

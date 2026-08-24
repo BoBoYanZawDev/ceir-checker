@@ -1,5 +1,6 @@
 import json
 import io
+import logging
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 from app.services.ceir_service import CEIRService
 
 
-def test_http_error_displays_ceir_message() -> None:
+def test_http_error_displays_and_logs_ceir_message(caplog) -> None:
     service = CEIRService()
     body = json.dumps({
         "status": 400,
@@ -21,15 +22,60 @@ def test_http_error_displays_ceir_message() -> None:
             raise urllib.error.HTTPError("https://ceir.test", 400, "Bad Request", {}, io.BytesIO(body))
 
     service.opener = FailingOpener()  # type: ignore[assignment]
+    request = urllib.request.Request("https://ceir.test/path?altchaData=secret-token")
     try:
-        service._json_request(urllib.request.Request("https://ceir.test"))
+        service._json_request(request)
     except RuntimeError as exc:
         assert str(exc) == "Not Found"
     else:
         raise AssertionError("Expected CEIR error")
 
+    assert "CEIR server error" in caplog.text
+    assert "status=400" in caplog.text
+    assert "https://ceir.test/path" in caplog.text
+    assert "Request to white list" in caplog.text
+    assert "secret-token" not in caplog.text
 
-def test_multiple_imeis_are_each_sent_as_their_own_altcha_request(monkeypatch) -> None:
+
+def test_debug_log_contains_request_parameters_data_and_response(caplog) -> None:
+    service = CEIRService()
+    response_body = json.dumps({"result": "server response"}).encode()
+
+    class SuccessfulResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return response_body
+
+    class SuccessfulOpener:
+        def open(self, _request, timeout):
+            return SuccessfulResponse()
+
+    service.opener = SuccessfulOpener()  # type: ignore[assignment]
+    caplog.set_level(logging.DEBUG, logger="ceir.api")
+    request = urllib.request.Request(
+        "https://ceir.test/openapi/check?altchaData=debug-token&imei=123456789012345",
+        data=b'{"name":"Debug User"}',
+        method="POST",
+    )
+
+    assert service._json_request(request) == {"result": "server response"}
+    assert "method=POST" in caplog.text
+    assert "api=https://ceir.test/openapi/check" in caplog.text
+    assert "debug-token" in caplog.text
+    assert "123456789012345" in caplog.text
+    assert 'Debug User' in caplog.text
+    assert "server response" in caplog.text
+
+
+def test_multiple_imeis_are_each_sent_as_their_own_altcha_data_request(monkeypatch) -> None:
     service = CEIRService()
     challenge_calls = {"count": 0}
 
@@ -45,7 +91,7 @@ def test_multiple_imeis_are_each_sent_as_their_own_altcha_request(monkeypatch) -
     def fake_request(request):
         payload = json.loads(request.data.decode())
         submitted.append(payload)
-        tokens_used.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["altcha"][0])
+        tokens_used.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["altchaData"][0])
         return {
             "IMEI_CHECK_LIST": [
                 {"IMEI": imei, "paymentState": "ACCUMULATION", "blockState": "UNBLOCKED"}
@@ -118,7 +164,7 @@ def test_device_info_maps_gsma_fields(monkeypatch) -> None:
     monkeypatch.setattr(service, "_json_request", fake_request)
     info = service.get_device_info("350782287836844")
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(requested_url).query)
-    assert query == {"altcha": ["null"], "imei": ["350782287836844"]}
+    assert query == {"altchaData": ["null"], "imei": ["350782287836844"]}
     assert info.brand == "Apple"
     assert info.model == "iPhone 17 Pro Max A3526"
     assert info.imei_quantity_support == 2
@@ -141,8 +187,8 @@ def test_device_info_falls_back_to_fresh_altcha(monkeypatch) -> None:
     service.get_device_info("350782287836844")
     queries = [urllib.parse.parse_qs(urllib.parse.urlsplit(url).query) for url in requested_urls]
     assert queries == [
-        {"altcha": ["null"], "imei": ["350782287836844"]},
-        {"altcha": ["device-token"], "imei": ["350782287836844"]},
+        {"altchaData": ["null"], "imei": ["350782287836844"]},
+        {"altchaData": ["device-token"], "imei": ["350782287836844"]},
     ]
 
 
@@ -162,7 +208,7 @@ def test_same_device_sends_both_device_tacs(monkeypatch) -> None:
     monkeypatch.setattr(service, "_json_request", fake_request)
     assert service.are_same_device(list(tacs)) is True
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(requested_url).query)
-    assert query == {"altcha": ["same-device-token"], "tacs": ["11111111", "22222222"]}
+    assert query == {"altchaData": ["same-device-token"], "tacs": ["11111111", "22222222"]}
 
 
 def test_same_device_sends_a_shared_tac_once(monkeypatch) -> None:
@@ -201,11 +247,11 @@ def test_filter_api_methods_use_dependent_codes(monkeypatch) -> None:
     service.get_tax_offices("MMR013")
     queries = [urllib.parse.parse_qs(urllib.parse.urlsplit(url).query) for url in requested_urls]
     assert queries == [
-        {"altcha": ["filter-token"]},
-        {"regionCode": ["12"], "altcha": ["filter-token"]},
-        {"altcha": ["filter-token"]},
-        {"altcha": ["filter-token"]},
-        {"regionCode": ["MMR013"], "altcha": ["filter-token"]},
+        {"altchaData": ["filter-token"]},
+        {"regionCode": ["12"], "altchaData": ["filter-token"]},
+        {"altchaData": ["filter-token"]},
+        {"altchaData": ["filter-token"]},
+        {"regionCode": ["MMR013"], "altchaData": ["filter-token"]},
     ]
 
 
@@ -301,7 +347,7 @@ def test_create_registration_requests_loops_one_device_per_call(monkeypatch) -> 
 
     def fake_request(request):
         submitted_bodies.append(json.loads(request.data.decode()))
-        tokens_used.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["altcha"][0])
+        tokens_used.append(urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["altchaData"][0])
         declaration_id = f"MM-CR-{len(submitted_bodies)}"
         return {"HasError": False, "Registry": {"DeclarationID": declaration_id, "amount": 100, "orderCalculation": {}}}
 
@@ -388,7 +434,7 @@ def test_initialize_payment_builds_official_ird_html(monkeypatch, tmp_path) -> N
     path = service.initialize_payment("MM-CR-TEST")
     assert path == str(destination)
     assert "payment-check-result" in requests[0].full_url
-    assert "altcha=payment-token" in requests[1].full_url
+    assert "altchaData=payment-token" in requests[1].full_url
     assert json.loads(requests[1].data.decode()) == {"fullName": "Example User"}
     assert '<base href="https://ceir.gov.mm/">' in destination.read_text(encoding="utf-8")
 

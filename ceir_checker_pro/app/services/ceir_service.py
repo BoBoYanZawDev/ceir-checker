@@ -4,6 +4,7 @@ import base64
 import hashlib
 import http.cookiejar
 import json
+import logging
 import ssl
 import subprocess
 import sys
@@ -34,6 +35,10 @@ from app.utils.constants import (
     CEIR_TOWNSHIP_URL,
     CEIR_VERIFY_URL,
 )
+
+
+logger = logging.getLogger(__name__)
+api_logger = logging.getLogger("ceir.api")
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,14 +121,59 @@ class CEIRService:
         self._browser_lock = threading.RLock()
         self._pending_challenge: dict | None = None
 
+    @staticmethod
+    def _log_server_error(request: urllib.request.Request, status: int, detail: str) -> None:
+        """Log a CEIR error response without exposing query tokens or request data."""
+        parsed_url = urllib.parse.urlsplit(request.full_url)
+        endpoint = urllib.parse.urlunsplit((parsed_url.scheme, parsed_url.netloc, parsed_url.path, "", ""))
+        logger.error(
+            "CEIR server error: method=%s endpoint=%s status=%s response=%s",
+            request.get_method(),
+            endpoint,
+            status,
+            detail.strip()[:4000] or "<empty>",
+        )
+
+    @staticmethod
+    def _log_api_exchange(request: urllib.request.Request, status: int, detail: str) -> None:
+        """Write complete request/response traffic when source debug logging is enabled."""
+        if not api_logger.isEnabledFor(logging.DEBUG):
+            return
+        parsed_url = urllib.parse.urlsplit(request.full_url)
+        endpoint = urllib.parse.urlunsplit((parsed_url.scheme, parsed_url.netloc, parsed_url.path, "", ""))
+        parameters = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+        request_data = (
+            request.data.decode("utf-8", errors="replace")
+            if request.data is not None
+            else "<none>"
+        )
+        api_logger.debug(
+            "CEIR API exchange\nmethod=%s\napi=%s\nparams=%s\ndata=%s\nstatus=%s\nresponse=%s",
+            request.get_method(),
+            endpoint,
+            json.dumps(parameters, ensure_ascii=False),
+            request_data,
+            status,
+            detail,
+        )
+
     def _json_request(self, request: urllib.request.Request) -> dict | list | bool:
         if self._browser is not None:
             return self._browser_json_request(request)
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                detail = response.read().decode("utf-8")
+                status = response.getcode()
+                self._log_api_exchange(request, status, detail)
+                try:
+                    return json.loads(detail)
+                except json.JSONDecodeError:
+                    self._log_server_error(request, status, detail)
+                    raise
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            self._log_api_exchange(request, exc.code, detail)
+            self._log_server_error(request, exc.code, detail)
             if exc.code == 403 and self._is_geo_blocked(detail):
                 raise RuntimeError(
                     "CEIR is only accessible from Myanmar. Turn off your VPN and try again."
@@ -162,7 +212,9 @@ class CEIRService:
             raise RuntimeError(f"Could not connect to CEIR: {result['error']}")
         status = int(result.get("status") or 0)
         detail = str(result.get("text") or "")
+        self._log_api_exchange(request, status, detail)
         if status >= 400:
+            self._log_server_error(request, status, detail)
             if status == 403 and self._is_geo_blocked(detail):
                 raise RuntimeError(
                     "CEIR is only accessible from Myanmar. Turn off your VPN and try again."
@@ -179,6 +231,7 @@ class CEIRService:
         try:
             return json.loads(detail)
         except json.JSONDecodeError as exc:
+            self._log_server_error(request, status, detail)
             raise RuntimeError("CEIR returned an unreadable response.") from exc
 
     def _text_request(self, request: urllib.request.Request) -> str:
@@ -186,9 +239,13 @@ class CEIRService:
         if self._browser is None:
             try:
                 with self.opener.open(request, timeout=self.timeout) as response:
-                    return response.read().decode("utf-8", errors="replace")
+                    detail = response.read().decode("utf-8", errors="replace")
+                    self._log_api_exchange(request, response.getcode(), detail)
+                    return detail
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
+                self._log_api_exchange(request, exc.code, detail)
+                self._log_server_error(request, exc.code, detail)
                 raise RuntimeError(
                     f"CEIR returned HTTP {exc.code}: {detail.strip()[:200] or exc.reason or 'Unknown error'}"
                 ) from exc
@@ -209,7 +266,9 @@ class CEIRService:
             raise RuntimeError(f"Could not connect to CEIR: {result['error']}")
         status = int(result.get("status") or 0)
         detail = str(result.get("text") or "")
+        self._log_api_exchange(request, status, detail)
         if status >= 400:
+            self._log_server_error(request, status, detail)
             if status == 403 and self._is_geo_blocked(detail):
                 raise RuntimeError("CEIR is only accessible from Myanmar. Turn off your VPN and try again.")
             try:
@@ -410,7 +469,7 @@ class CEIRService:
 
     def _verify_one(self, imei: str) -> CheckResult:
         token = self._solve(self._challenge())
-        url = f"{CEIR_VERIFY_URL}?{urllib.parse.urlencode({'altcha': token})}"
+        url = f"{CEIR_VERIFY_URL}?{urllib.parse.urlencode({'altchaData': token})}"
         request = urllib.request.Request(
             url,
             data=json.dumps([imei]).encode(),
@@ -430,9 +489,9 @@ class CEIRService:
     def get_device_info(self, imei: str) -> DeviceInfo:
         """Return GSMA device metadata for one IMEI from CEIR."""
         self._ensure_session()
-        # CEIR currently allows public device metadata with altcha=null. Fall
+        # CEIR currently allows public device metadata with altchaData=null. Fall
         # back to a fresh PoW token if that fast path is rejected or empty.
-        null_query = urllib.parse.urlencode({"altcha": "null", "imei": imei})
+        null_query = urllib.parse.urlencode({"altchaData": "null", "imei": imei})
         try:
             request = urllib.request.Request(f"{CEIR_DEVICE_INFO_URL}?{null_query}", headers=self.headers)
             data = self._json_request(request)
@@ -440,7 +499,7 @@ class CEIRService:
             data = {}
         if not self._has_device_info(data):
             token = self._solve(self._challenge())
-            query = urllib.parse.urlencode({"altcha": token, "imei": imei})
+            query = urllib.parse.urlencode({"altchaData": token, "imei": imei})
             request = urllib.request.Request(f"{CEIR_DEVICE_INFO_URL}?{query}", headers=self.headers)
             data = self._json_request(request)
         if not self._has_device_info(data):
@@ -468,7 +527,7 @@ class CEIRService:
         # that TAC once. Preserve order while removing duplicates.
         tacs = list(dict.fromkeys(self.get_device_info(imei).tac or imei[:8] for imei in imeis))
         token = self._solve(self._challenge())
-        query = urllib.parse.urlencode({"altcha": token, "tacs": tacs}, doseq=True)
+        query = urllib.parse.urlencode({"altchaData": token, "tacs": tacs}, doseq=True)
         response = self._json_request(urllib.request.Request(f"{CEIR_SAME_DEVICE_URL}?{query}", headers=self.headers))
         if isinstance(response, bool):
             return response
@@ -480,7 +539,7 @@ class CEIRService:
 
     def _protected_list(self, url: str, **parameters: object) -> list[dict]:
         token = self._solve(self._challenge())
-        query = urllib.parse.urlencode({**parameters, "altcha": token})
+        query = urllib.parse.urlencode({**parameters, "altchaData": token})
         response = self._json_request(urllib.request.Request(f"{url}?{query}", headers=self.headers))
         if not isinstance(response, list):
             raise RuntimeError("CEIR returned an unreadable filter response.")
@@ -508,7 +567,7 @@ class CEIRService:
     def get_registration_status(self, declaration_id: str) -> RegistrationStatus:
         """Return CEIR registration/tax status for one declaration ID."""
         token = self._solve(self._challenge())
-        query = urllib.parse.urlencode({"DeclarationID": declaration_id, "altcha": token})
+        query = urllib.parse.urlencode({"DeclarationID": declaration_id, "altchaData": token})
         request = urllib.request.Request(f"{CEIR_REGISTRATION_STATUS_URL}?{query}", headers=self.headers)
         data = self._json_request(request)
         status = data.get("RequestStatus") or data
@@ -518,7 +577,7 @@ class CEIRService:
             raise RuntimeError(str(message))
         declaration_hash = str(status.get("declarationHash") or status.get("DeclarationHash") or "")
         if declaration_hash:
-            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altchaData": "null"})
             try:
                 applicant = self._json_request(
                     urllib.request.Request(f"{CEIR_APPLICANT_URL}?{applicant_query}", headers=self.headers)
@@ -578,7 +637,7 @@ class CEIRService:
         applicant identity - it is not a read-only quote.
         """
         token = self._solve(self._challenge())
-        query = urllib.parse.urlencode({"source": source, "altcha": token})
+        query = urllib.parse.urlencode({"source": source, "altchaData": token})
         body = json.dumps({
             "imeisList": [{"imeis": imeis} for imeis in devices],
             "applicant": applicant,
@@ -631,16 +690,16 @@ class CEIRService:
         if not declaration_hash:
             raise RuntimeError("CEIR did not return a declaration hash for payment.")
 
-        warmup_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+        warmup_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altchaData": "null"})
         self._text_request(urllib.request.Request(f"{CEIR_PAYMENT_CHECK_URL}?{warmup_query}", headers=self.headers))
 
         if applicant is None:
-            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": "null"})
+            applicant_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altchaData": "null"})
             applicant = self._json_request(
                 urllib.request.Request(f"{CEIR_APPLICANT_URL}?{applicant_query}", headers=self.headers)
             )
         token = self._solve(self._challenge())
-        payment_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altcha": token})
+        payment_query = urllib.parse.urlencode({"declarationHash": declaration_hash, "altchaData": token})
         request = urllib.request.Request(
             f"{CEIR_PAYMENT_URL}?{payment_query}",
             data=json.dumps(applicant).encode("utf-8"),
