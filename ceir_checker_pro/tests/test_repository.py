@@ -37,7 +37,9 @@ def test_registration_history_recovers_and_searches_imeis(tmp_path) -> None:
 
 def test_only_real_unpaid_states_offer_paytax() -> None:
     assert is_payable_unpaid("UNPAID", False)
-    assert is_payable_unpaid("ACCUMULATION", False)
-    assert is_payable_unpaid("PAYMENT_PENDING", False)
+    assert is_payable_unpaid("UNPAID", False, True)
+    assert not is_payable_unpaid("UNPAID", False, False)
+    assert not is_payable_unpaid("ACCUMULATION", True)
+    assert not is_payable_unpaid("PAYMENT_PENDING", None)
     assert not is_payable_unpaid("FAILED", False)
     assert not is_payable_unpaid("PAID", True)

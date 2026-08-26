@@ -41,6 +41,20 @@ logger = logging.getLogger(__name__)
 api_logger = logging.getLogger("ceir.api")
 
 
+def format_payment_status(value: object) -> str:
+    """Return the user-facing CEIR payment status."""
+    state = str(value or "").strip().upper()
+    if state == "ကန့်သတ်ချက်ဖြင့်ခွင့်ပြုထားသည့်ပစ္စည်း":
+        return state
+    if state in {"PAID", "ACCUMULATION"}:
+        return "PAID"
+    if state == "UNPAID":
+        return "UNPAID"
+    if state == "AMNESTY":
+        return "ကန့်သတ်ချက်ဖြင့်ခွင့်ပြုထားသည့်ပစ္စည်း"
+    return "မသိရ"
+
+
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     imei: str
@@ -430,17 +444,15 @@ class CEIRService:
         block = str(item.get("blockState", "UNKNOWN"))
         payment_upper = payment.upper()
         block_upper = block.upper()
-        if payment_upper == "UNKNOWN":
-            taxation = None
+        if payment_upper in {"PAID", "ACCUMULATION"}:
+            taxation = True
+        elif payment_upper == "UNPAID":
+            taxation = False
         else:
-            unpaid_markers = ("UNPAID", "NOT_", "PENDING", "ACCUMULATION", "DUE")
-            taxation = not any(marker in payment_upper for marker in unpaid_markers) and (
-                payment_upper in {"PAID", "PAYMENT_SUCCESS", "COMPLETED"}
-                or payment_upper.endswith("_PAID")
-            )
+            taxation = None
         network = None if block_upper == "UNKNOWN" else "UNBLOCKED" in block_upper or block_upper in {"PASS", "OK"}
         return CheckResult(
-            imei=str(item.get("IMEI", imei)), payment_state=payment, block_state=block,
+            imei=str(item.get("IMEI", imei)), payment_state=format_payment_status(payment), block_state=block,
             taxation_status=taxation, network_status=network, raw=item,
         )
 
@@ -598,9 +610,10 @@ class CEIRService:
         )
         calculations = (status.get("orderCalculation") or {}).get("collectingCalculations") or []
         amounts = {str(item.get("collectingType", "")): int(item.get("amount") or 0) for item in calculations}
-        business_state = str(status.get("BusinessState", "UNKNOWN"))
-        state_upper = business_state.upper()
-        taxation_status = None if state_upper == "UNKNOWN" else state_upper in {"PAID", "APPROVED", "CONFIRMED", "COMPLETED"}
+        raw_business_state = str(status.get("BusinessState", "UNKNOWN"))
+        state_upper = raw_business_state.upper()
+        business_state = format_payment_status(raw_business_state)
+        taxation_status = True if state_upper in {"PAID", "ACCUMULATION"} else False if state_upper == "UNPAID" else None
         total_tax = int((status.get("orderCalculation") or {}).get("amount") or status.get("amount") or 0)
         return RegistrationStatus(
             declaration_id=str(status.get("DeclarationID") or status.get("declarationId") or declaration_id),

@@ -18,7 +18,7 @@ import customtkinter as ctk
 
 from app.models.calculation import ApplicantProfile, CalculationRecord, TaxResult, TaxSettings
 from app.repositories.calculation_repository import CalculationRepository
-from app.services.ceir_service import CEIRService, RegistrationTaxQuote
+from app.services.ceir_service import CEIRService, RegistrationTaxQuote, format_payment_status
 from app.services.export_service import ExportService
 from app.services.tax_service import TaxService
 from app.utils.constants import APP_NAME, CHECK_TYPES, PAGE_SIZE
@@ -68,6 +68,30 @@ def status_glyph(value: object) -> str:
     return "✔" if bool(value) else "✘"
 
 
+def enable_copy_shortcuts(widget: object) -> None:
+    """Make selected CustomTkinter input text copyable on macOS and Windows."""
+    editor = getattr(widget, "_textbox", getattr(widget, "_entry", widget))
+
+    def copy_selection(_event: object = None) -> str:
+        try:
+            selected = editor.get("sel.first", "sel.last")
+        except TypeError:
+            try:
+                value = editor.get()
+                selected = value[editor.index("sel.first"):editor.index("sel.last")]
+            except (tk.TclError, TypeError):
+                return "break"
+        except tk.TclError:
+            return "break"
+        editor.clipboard_clear()
+        editor.clipboard_append(selected)
+        return "break"
+
+    editor.bind("<Command-c>", copy_selection, add="+")
+    editor.bind("<Control-c>", copy_selection, add="+")
+    editor.bind("<Control-Insert>", copy_selection, add="+")
+
+
 def format_ceir_datetime(value: str) -> str:
     """Trim a CEIR ISO timestamp down to 'YYYY-MM-DD HH:MM:SS' for display."""
     if not value:
@@ -76,11 +100,14 @@ def format_ceir_datetime(value: str) -> str:
     return text.split(".", 1)[0]
 
 
-def is_payable_unpaid(payment_state: object, taxation_status: object) -> bool:
-    """Exclude transport/check failures while accepting CEIR pending tax states."""
-    state = str(payment_state or "").upper()
-    return taxation_status is False and not any(
-        marker in state for marker in ("FAIL", "ERROR", "UNKNOWN", "INVALID")
+def is_payable_unpaid(
+    payment_state: object, taxation_status: object, can_pay: object = None,
+) -> bool:
+    """Offer Pay Tax only for UNPAID records that CEIR allows to be paid."""
+    return (
+        taxation_status is False
+        and str(payment_state or "").upper() == "UNPAID"
+        and can_pay is not False
     )
 
 
@@ -856,7 +883,9 @@ class LiveResultsGrid(tk.Frame):
         row = self._field_pair(row, ("Network", item.get("network_text", "")))
         taxation_row = row
         row = self._field_pair(row, ("Taxation", item.get("taxation_text", "")))
-        if is_payable_unpaid(item.get("taxation_text"), item.get("taxation_good")):
+        if is_payable_unpaid(
+            item.get("taxation_text"), item.get("taxation_good"), item.get("can_pay"),
+        ):
             self._pay_tax_button(taxation_row, str(item.get("identifier") or ""), 5, 2)
         row = self._field_pair(row, ("End Of Grace Period", verification.get("endOfGracePeriod") or verification.get("gracePeriodEnd") or ""))
         row = self._section(row + 1, "Hardware Specs")
@@ -913,7 +942,9 @@ class LiveResultsGrid(tk.Frame):
                 elif column == 5:
                     color = GREEN if item.get("network_good") else RED
                 self._label(data_row, column, value, color=color, pady=6, anchor="center" if column != 1 else "w")
-            if is_payable_unpaid(item.get("taxation_text"), item.get("taxation_good")):
+            if is_payable_unpaid(
+                item.get("taxation_text"), item.get("taxation_good"), item.get("can_pay"),
+            ):
                 self._pay_tax_button(data_row, str(item.get("identifier") or ""), 6)
             else:
                 self._label(data_row, 6, "—", color=muted, pady=6, anchor="center")
@@ -931,7 +962,7 @@ class LiveResultsGrid(tk.Frame):
                 grid_row = self._field_pair(
                     grid_row,
                     ("Declaration ID", item.get("identifier", "")),
-                    ("Business State", status.get("BusinessState") or item.get("taxation_text", "")),
+                    ("Business State", format_payment_status(status.get("BusinessState") or item.get("taxation_text", ""))),
                 )
                 grid_row = self._field_pair(
                     grid_row,
@@ -956,7 +987,11 @@ class LiveResultsGrid(tk.Frame):
         if not isinstance(status, dict):
             status = {}
         row = self._section(0, "Application Summary")
-        row = self._field_pair(row, ("Declaration ID", item.get("identifier", "")), ("Business State", status.get("BusinessState") or item.get("taxation_text", "")))
+        row = self._field_pair(
+            row,
+            ("Declaration ID", item.get("identifier", "")),
+            ("Business State", format_payment_status(status.get("BusinessState") or item.get("taxation_text", ""))),
+        )
         row = self._field_pair(row, ("MSISDN", status.get("MSISDN") or ""), ("Registration Type", status.get("RegistrationType") or "None"))
         row = self._field_pair(row, ("Total Amount", item.get("tax_text", "")), ("Payment Amount", status.get("paymentAmount") or "0 MMK"))
         row = self._field_pair(row, ("Created Date", status.get("createdDt") or ""), ("Approved Date", status.get("approvedDt") or "None"))
@@ -1103,6 +1138,7 @@ class CheckView(Page):
             selectbackground=BLUE, selectforeground="#FFFFFF",
             inactiveselectbackground="#BFD2FA",
         )
+        enable_copy_shortcuts(self.imei)
         self.paytax_frame = ctk.CTkFrame(
             input_panel, corner_radius=0, fg_color=("#F7F7F8", "#0F1929")
         )
@@ -1116,6 +1152,7 @@ class CheckView(Page):
         imei1_row.grid_columnconfigure(0, weight=1)
         self.paytax_imei1 = ctk.CTkEntry(imei1_row, placeholder_text="Enter IMEI 1…", height=42)
         self.paytax_imei1.grid(row=0, column=0, sticky="ew")
+        enable_copy_shortcuts(self.paytax_imei1)
         imei1_clear_button = ctk.CTkButton(
             imei1_row, text="×", width=20, height=20, corner_radius=10,
             font=ctk.CTkFont(size=12), fg_color="transparent",
@@ -1128,6 +1165,7 @@ class CheckView(Page):
         imei2_row.grid_columnconfigure(0, weight=1)
         self.paytax_imei2 = ctk.CTkEntry(imei2_row, placeholder_text="Enter IMEI 2…", height=42)
         self.paytax_imei2.grid(row=0, column=0, sticky="ew")
+        enable_copy_shortcuts(self.paytax_imei2)
         imei2_clear_button = ctk.CTkButton(
             imei2_row, text="×", width=20, height=20, corner_radius=10,
             font=ctk.CTkFont(size=12), fg_color="transparent",
@@ -2131,18 +2169,21 @@ class CheckView(Page):
 
         dialog = ctk.CTkToplevel(self)
         dialog.title("Choose an unpaid IMEI")
-        dialog.geometry("430x420")
+        dialog.geometry("480x520")
+        dialog.minsize(430, 440)
         dialog.transient(self.winfo_toplevel())
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(2, weight=1)
         ctk.CTkLabel(
             dialog, text="Choose an IMEI to continue in PayTax",
             font=ctk.CTkFont(size=17, weight="bold"), anchor="w",
-        ).pack(fill="x", padx=20, pady=(20, 5))
+        ).grid(row=0, column=0, padx=20, pady=(20, 5), sticky="ew")
         ctk.CTkLabel(
             dialog, text=f"{len(self.unpaid_imeis)} unpaid IMEIs found. Select 1 or 2 IMEIs.",
             text_color=("#64748B", "#94A3B8"), anchor="w",
-        ).pack(fill="x", padx=20, pady=(0, 12))
+        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky="ew")
         choices = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
-        choices.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        choices.grid(row=2, column=0, padx=16, pady=(0, 10), sticky="nsew")
         selected_variables: dict[str, tk.BooleanVar] = {}
         selection_status = ctk.CTkLabel(
             dialog, text="Select at least one IMEI", text_color=("#64748B", "#94A3B8"),
@@ -2171,16 +2212,16 @@ class CheckView(Page):
                 choices, text=imei, variable=variable, height=38, corner_radius=6,
                 command=lambda value=imei: update_selection(value),
             ).pack(fill="x", pady=4)
-        selection_status.pack(fill="x", padx=20, pady=(0, 8))
+        selection_status.grid(row=3, column=0, padx=20, pady=(0, 8), sticky="ew")
         actions = ctk.CTkFrame(dialog, fg_color="transparent")
-        actions.pack(fill="x", padx=20, pady=(0, 18))
+        actions.grid(row=4, column=0, padx=20, pady=(0, 18), sticky="ew")
         actions.grid_columnconfigure((0, 1), weight=1)
         ctk.CTkButton(
             actions, text="Cancel", height=38, fg_color=("#E5E7EB", "#334155"),
             text_color=("#374151", "#F8FAFC"), command=dialog.destroy,
         ).grid(row=0, column=0, padx=(0, 5), sticky="ew")
         continue_button = ctk.CTkButton(
-            actions, text="Continue to PayTax", height=38, state="disabled",
+            actions, text="Continue to PayTax  →", height=38, state="disabled",
             fg_color=BLUE, hover_color=BLUE_HOVER,
             command=lambda: self._open_selected_unpaid_in_paytax(selected_imeis(), dialog),
         )
@@ -2367,7 +2408,9 @@ class CheckView(Page):
                     details["device_info"] = device_info.raw
                 if device_error:
                     details["device_info_error"] = device_error
-                if is_payable_unpaid(result.payment_state, result.taxation_status):
+                if is_payable_unpaid(
+                    result.payment_state, result.taxation_status, result.raw.get("canPay"),
+                ):
                     unpaid.append(imei)
                 self.repository.add(CalculationRecord(
                     check_type=check_type, imei_or_app_id=imei,
@@ -2542,14 +2585,19 @@ class CheckView(Page):
         extra_text: str = "",
         details: dict | None = None,
     ) -> None:
+        payment = format_payment_status(payment)
+        result_details = details or {}
+        verification = result_details.get("verification", result_details)
+        can_pay = verification.get("canPay") if isinstance(verification, dict) else None
         self.live_results.append({
             "identifier": identifier,
             "device": " ".join(part for part in (brand, model) if part),
             "taxation_text": payment, "network_text": block,
             "base_text": format_mmk(base_price), "tax_text": format_mmk(total_tax),
             "taxation_good": taxation_good, "network_good": network_good,
+            "can_pay": can_pay,
             "extra_text": extra_text,
-            "details": details or {},
+            "details": result_details,
         })
         self.result_page = max(1, math.ceil(len(self.live_results) / self.result_page_size))
         self._render_result_page()

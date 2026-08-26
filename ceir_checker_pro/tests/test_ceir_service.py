@@ -6,7 +6,16 @@ import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
-from app.services.ceir_service import CEIRService
+from app.services.ceir_service import CEIRService, format_payment_status
+
+
+def test_payment_status_mapping() -> None:
+    assert format_payment_status("PAID") == "PAID"
+    assert format_payment_status("ACCUMULATION") == "PAID"
+    assert format_payment_status("UNPAID") == "UNPAID"
+    assert format_payment_status("AMNESTY") == "ကန့်သတ်ချက်ဖြင့်ခွင့်ပြုထားသည့်ပစ္စည်း"
+    assert format_payment_status(format_payment_status("AMNESTY")) == "ကန့်သတ်ချက်ဖြင့်ခွင့်ပြုထားသည့်ပစ္စည်း"
+    assert format_payment_status("FAILED") == "မသိရ"
 
 
 def test_http_error_displays_and_logs_ceir_message(caplog) -> None:
@@ -106,15 +115,17 @@ def test_multiple_imeis_are_each_sent_as_their_own_altcha_data_request(monkeypat
     assert len(set(tokens_used)) == 2
     assert [result.imei for result in results] == imeis
     assert all(result.network_status is True for result in results)
-    assert all(result.taxation_status is False for result in results)
+    assert all(result.payment_state == "PAID" for result in results)
+    assert all(result.taxation_status is True for result in results)
 
 
-def test_not_tax_paid_is_never_misread_as_paid() -> None:
+def test_unknown_payment_state_is_not_misread_as_paid_or_unpaid() -> None:
     result = CEIRService._to_check_result(
         "123456789012345",
         {"IMEI": "123456789012345", "paymentState": "NOT_TAX_PAID", "blockState": "UNBLOCKED"},
     )
-    assert result.taxation_status is False
+    assert result.payment_state == "မသိရ"
+    assert result.taxation_status is None
 
 
 def test_check_imeis_reports_one_failure_without_aborting_others(monkeypatch) -> None:
@@ -139,7 +150,7 @@ def test_check_imeis_reports_one_failure_without_aborting_others(monkeypatch) ->
     imeis = ["111111111111111", "222222222222222"]
     results = service.check_imeis(imeis)
     assert [result.imei for result in results] == imeis
-    assert results[0].payment_state == "FAILED"
+    assert results[0].payment_state == "မသိရ"
     assert "do not belong to the same device" in results[0].raw["error"]
     assert results[1].payment_state == "PAID"
     assert results[1].network_status is True
